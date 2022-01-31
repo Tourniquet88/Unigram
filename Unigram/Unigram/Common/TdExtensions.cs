@@ -1,8 +1,8 @@
-﻿using libtgvoip;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using System.Threading;
 using Telegram.Td.Api;
@@ -16,190 +16,23 @@ using Point = Windows.Foundation.Point;
 
 namespace Unigram.Common
 {
-    public static class TdBackground
-    {
-        public static BackgroundType FromUri(Uri uri)
-        {
-            var slug = uri.Segments.Last();
-            var query = uri.Query.ParseQueryString();
-
-            var split = slug.Split('-');
-            if (split.Length > 0 && split[0].Length == 6 && int.TryParse(split[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int topColor))
-            {
-                if (split.Length > 1 && split[1].Length == 6 && int.TryParse(split[1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int bottomColor))
-                {
-                    query.TryGetValue("rotation", out string rotationKey);
-                    int.TryParse(rotationKey ?? string.Empty, out int rotation);
-
-                    return new BackgroundTypeFill(new BackgroundFillGradient(topColor, bottomColor, rotation));
-                }
-
-                return new BackgroundTypeFill(new BackgroundFillSolid(topColor));
-            }
-            else
-            {
-                query.TryGetValue("mode", out string modeKey);
-                query.TryGetValue("bg_color", out string bg_colorKey);
-
-                var modeSplit = modeKey?.ToLower().Split('+') ?? new string[0];
-                var bgSplit = bg_colorKey?.Split('-') ?? new string[0];
-
-                if (bgSplit.Length > 0 && int.TryParse(bgSplit[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int bgTopColor))
-                {
-                    BackgroundFill fill;
-                    if (bgSplit.Length > 1 && int.TryParse(bgSplit[1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int bgBottomColor))
-                    {
-                        query.TryGetValue("rotation", out string rotationKey1);
-                        int.TryParse(rotationKey1 ?? string.Empty, out int rotation1);
-
-                        fill = new BackgroundFillGradient(bgTopColor, bgBottomColor, rotation1);
-                    }
-                    else
-                    {
-                        fill = new BackgroundFillSolid(bgTopColor);
-                    }
-
-                    query.TryGetValue("intensity", out string intensityKey);
-                    int.TryParse(intensityKey, out int intensity);
-
-                    return new BackgroundTypePattern(fill, Math.Abs(intensity), intensity < 0, modeSplit.Contains("motion"));
-                }
-                else
-                {
-                    return new BackgroundTypeWallpaper(modeSplit.Contains("blur"), modeSplit.Contains("motion"));
-                }
-            }
-        }
-
-        public static string ToString(Background background)
-        {
-            if (background.Type is BackgroundTypeFill typeFill)
-            {
-                if (typeFill.Fill is BackgroundFillSolid fillSolid)
-                {
-                    var color = fillSolid.Color.ToColor();
-                    return string.Format("{0:X2}{1:X2}{2:X2}", color.R, color.G, color.B);
-                }
-                else if (typeFill.Fill is BackgroundFillGradient fillGradient)
-                {
-                    var topColor = fillGradient.TopColor.ToColor();
-                    var bottomColor = fillGradient.BottomColor.ToColor();
-
-                    return string.Format("{0:X2}{1:X2}{2:X2}-{3:X2}{4:X2}{5:X2}?rotation={6}", topColor.R, topColor.G, topColor.B, bottomColor.R, bottomColor.G, bottomColor.B, fillGradient.RotationAngle);
-                }
-            }
-            else if (background.Type is BackgroundTypePattern typePattern)
-            {
-                string builder = "?";
-                if (typePattern.Fill is BackgroundFillSolid fillSolid)
-                {
-                    var color = fillSolid.Color.ToColor();
-                    builder += string.Format("bg_color={0:X2}{1:X2}{2:X2}&", color.R, color.G, color.B);
-                }
-                else if (typePattern.Fill is BackgroundFillGradient fillGradient)
-                {
-                    var topColor = fillGradient.TopColor.ToColor();
-                    var bottomColor = fillGradient.BottomColor.ToColor();
-
-                    builder += string.Format("bg_color={0:X2}{1:X2}{2:X2}-{3:X2}{4:X2}{5:X2}&rotation={6}&", topColor.R, topColor.G, topColor.B, bottomColor.R, bottomColor.G, bottomColor.B, fillGradient.RotationAngle);
-                }
-
-                builder += $"intensity={typePattern.Intensity}&";
-
-                if (typePattern.IsMoving)
-                {
-                    builder += "mode=motion";
-                }
-
-                return background.Name + builder.TrimEnd('&');
-            }
-            else if (background.Type is BackgroundTypeWallpaper typeWallpaper)
-            {
-                string builder = string.Empty;
-
-                if (typeWallpaper.IsMoving)
-                {
-                    builder += "?mode=motion";
-                }
-
-                if (typeWallpaper.IsBlurred)
-                {
-                    if (builder.Length > 0)
-                    {
-                        builder += "+blur";
-                    }
-                    else
-                    {
-                        builder += "?mode=blur";
-                    }
-                }
-
-                return background.Name + builder;
-            }
-
-            return null;
-        }
-
-        public static LinearGradientBrush GetGradient(int topColor, int bottomColor, int angle)
-        {
-            return GetGradient(topColor.ToColor(), bottomColor.ToColor(), angle);
-        }
-
-        public static LinearGradientBrush GetGradient(Color topColor, Color bottomColor, int angle)
-        {
-            Point topPoint;
-            Point bottomPoint;
-
-            switch (angle)
-            {
-                case 0:
-                case 360:
-                    topPoint = new Point(0.5, 0);
-                    bottomPoint = new Point(0.5, 1);
-                    break;
-                case 45:
-                default:
-                    topPoint = new Point(1, 0);
-                    bottomPoint = new Point(0, 1);
-                    break;
-                case 90:
-                    topPoint = new Point(1, 0.5);
-                    bottomPoint = new Point(0, 0.5);
-                    break;
-                case 135:
-                    topPoint = new Point(1, 1);
-                    bottomPoint = new Point(0, 0);
-                    break;
-                case 180:
-                    topPoint = new Point(0.5, 1);
-                    bottomPoint = new Point(0.5, 0);
-                    break;
-                case 225:
-                    topPoint = new Point(0, 1);
-                    bottomPoint = new Point(1, 0);
-                    break;
-                case 270:
-                    topPoint = new Point(0, 0.5);
-                    bottomPoint = new Point(1, 0.5);
-                    break;
-                case 315:
-                    topPoint = new Point(0, 0);
-                    bottomPoint = new Point(1, 1);
-                    break;
-            }
-
-            var brush = new LinearGradientBrush();
-            brush.GradientStops.Add(new GradientStop { Color = topColor, Offset = 0 });
-            brush.GradientStops.Add(new GradientStop { Color = bottomColor, Offset = 1 });
-            brush.StartPoint = topPoint;
-            brush.EndPoint = bottomPoint;
-
-            return brush;
-        }
-    }
-
     public static class TdExtensions
     {
+        public static Vector2 ToVector2(this Telegram.Td.Api.Point point)
+        {
+            return new Vector2((float)point.X, (float)point.Y);
+        }
+
+        public static bool IsValidState(this Call call)
+        {
+            if (call == null || call.State is CallStateDiscarded || call.State is CallStateError)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
         public static File InvalidFile()
         {
             return new File(0, 0, 0, new LocalFile(string.Empty, false, false, false, false, 0, 0, 0), new RemoteFile(string.Empty, string.Empty, false, false, 0));
@@ -207,7 +40,7 @@ namespace Unigram.Common
 
         public static int ToId(this ChatList chatList)
         {
-            if (chatList is ChatListMain || chatList == null)
+            if (chatList is ChatListMain or null)
             {
                 return 0;
             }
@@ -258,6 +91,17 @@ namespace Unigram.Common
             return defaultValue;
         }
 
+        public static JsonValueObject GetNamedObject(this JsonValueObject json, string key)
+        {
+            var member = json.GetNamedValue(key);
+            if (member?.Value is JsonValueObject value)
+            {
+                return value;
+            }
+
+            return null;
+        }
+
         public static JsonObjectMember GetNamedValue(this JsonValueObject json, string key)
         {
             if (json == null)
@@ -272,7 +116,7 @@ namespace Unigram.Common
 
         public static string ToOutcomeText(this MessageCall call, bool outgoing)
         {
-            var missed = call.DiscardReason is CallDiscardReasonMissed || call.DiscardReason is CallDiscardReasonDeclined;
+            var missed = call.DiscardReason is CallDiscardReasonMissed or CallDiscardReasonDeclined;
 
             if (call.IsVideo)
             {
@@ -306,7 +150,17 @@ namespace Unigram.Common
             }
             else if (pattern.Fill is BackgroundFillGradient gradient)
             {
-                return ColorEx.GetPatternColor(ColorEx.GetAverageColor(gradient.TopColor.ToColor(), gradient.BottomColor.ToColor()));
+                return ColorEx.GetPatternColor(ColorEx.GetAverageColor(gradient.TopColor, gradient.BottomColor));
+            }
+            else if (pattern.Fill is BackgroundFillFreeformGradient freeform)
+            {
+                var averageColor = ColorEx.GetAverageColor(freeform.Colors[2], ColorEx.GetAverageColor(freeform.Colors[0], freeform.Colors[1]));
+                if (freeform.Colors.Count > 3)
+                {
+                    averageColor = ColorEx.GetAverageColor(freeform.Colors[3], averageColor);
+                }
+
+                return ColorEx.GetPatternColor(averageColor, true);
             }
 
             return Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF);
@@ -336,6 +190,25 @@ namespace Unigram.Common
             return null;
         }
 
+        public static bool IsFreeformGradient(this Background background)
+        {
+            if (background?.Type is BackgroundTypeFill typeFill)
+            {
+                return typeFill.Fill is BackgroundFillFreeformGradient;
+            }
+            else if (background?.Type is BackgroundTypePattern typePattern)
+            {
+                return typePattern.Fill is BackgroundFillFreeformGradient;
+            }
+
+            return false;
+        }
+
+        public static Color[] GetColors(this BackgroundFillFreeformGradient freeform)
+        {
+            return freeform.Colors.Select(x => x.ToColor()).ToArray();
+        }
+
         public static bool ListEquals(this ChatList x, ChatList y, bool allowNull = true)
         {
             if ((x is ChatListMain || x == null) && (y is ChatListMain || (y == null && allowNull)))
@@ -362,6 +235,29 @@ namespace Unigram.Common
                  string.Equals(webPage.Type, "telegram_album", StringComparison.OrdinalIgnoreCase));
         }
 
+        public static bool NeedInfo(this Invoice invoice)
+        {
+            return invoice.NeedShippingAddress || invoice.NeedPhoneNumber || invoice.NeedName || invoice.NeedEmailAddress;
+        }
+
+        public static bool HasVideoInfo(this GroupCallParticipant participant)
+        {
+            return participant.ScreenSharingVideoInfo != null || participant.VideoInfo != null;
+        }
+
+        public static IEnumerable<GroupCallParticipantVideoInfo> GetVideoInfo(this GroupCallParticipant participant)
+        {
+            if (participant.ScreenSharingVideoInfo != null)
+            {
+                yield return participant.ScreenSharingVideoInfo;
+            }
+
+            if (participant.VideoInfo != null)
+            {
+                yield return participant.VideoInfo;
+            }
+        }
+
         public static InputThumbnail ToInputThumbnail(this PhotoSize photo)
         {
             if (photo == null)
@@ -382,9 +278,29 @@ namespace Unigram.Common
             return new InputThumbnail(new InputFileId(thumbnail.File.Id), thumbnail.Width, thumbnail.Height);
         }
 
-        public static bool AreEqual(this Message x, Message y)
+        public static bool IsEqualTo(this Message x, Message y)
         {
-            if (y == null)
+            if (x == null || y == null)
+            {
+                return false;
+            }
+
+            return x.Id == y.Id && x.ChatId == y.ChatId;
+        }
+
+        public static bool IsEqualTo(this MessageViewModel x, Message y)
+        {
+            if (x == null || y == null)
+            {
+                return false;
+            }
+
+            return x.Id == y.Id && x.ChatId == y.ChatId;
+        }
+
+        public static bool IsEqualTo(this MessageViewModel x, MessageViewModel y)
+        {
+            if (x == null || y == null)
             {
                 return false;
             }
@@ -495,13 +411,13 @@ namespace Unigram.Common
         {
             switch (entity.Type)
             {
-                case TextEntityTypeBold bold:
-                case TextEntityTypeItalic italic:
-                case TextEntityTypeCode code:
-                case TextEntityTypePre pre:
-                case TextEntityTypePreCode preCode:
-                case TextEntityTypeTextUrl textUrl:
-                case TextEntityTypeMentionName mentionName:
+                case TextEntityTypeBold:
+                case TextEntityTypeItalic:
+                case TextEntityTypeCode:
+                case TextEntityTypePre:
+                case TextEntityTypePreCode:
+                case TextEntityTypeTextUrl:
+                case TextEntityTypeMentionName:
                     return true;
                 default:
                     return false;
@@ -525,91 +441,6 @@ namespace Unigram.Common
                 default:
                     return null;
             }
-        }
-
-        public static (File File, string FileName) GetFileAndName(this Message message, bool allowPhoto)
-        {
-            switch (message.Content)
-            {
-                case MessageAnimation animation:
-                    return (animation.Animation.AnimationValue, animation.Animation.FileName);
-                case MessageAudio audio:
-                    return (audio.Audio.AudioValue, audio.Audio.FileName);
-                case MessageDocument document:
-                    return (document.Document.DocumentValue, document.Document.FileName);
-                case MessageGame game:
-                    if (game.Game.Animation != null)
-                    {
-                        return (game.Game.Animation.AnimationValue, game.Game.Animation.FileName);
-                    }
-                    else if (game.Game.Photo != null && allowPhoto)
-                    {
-                        var big = game.Game.Photo.GetBig();
-                        if (big != null)
-                        {
-                            return (big.Photo, null);
-                        }
-                    }
-                    break;
-                case MessagePhoto photo:
-                    if (allowPhoto)
-                    {
-                        var big = photo.Photo.GetBig();
-                        if (big != null)
-                        {
-                            return (big.Photo, null);
-                        }
-                    }
-                    break;
-                case MessageSticker sticker:
-                    return (sticker.Sticker.StickerValue, null);
-                case MessageText text:
-                    if (text.WebPage != null && text.WebPage.Animation != null)
-                    {
-                        return (text.WebPage.Animation.AnimationValue, text.WebPage.Animation.FileName);
-                    }
-                    else if (text.WebPage != null && text.WebPage.Audio != null)
-                    {
-                        return (text.WebPage.Audio.AudioValue, text.WebPage.Audio.FileName);
-                    }
-                    else if (text.WebPage != null && text.WebPage.Document != null)
-                    {
-                        return (text.WebPage.Document.DocumentValue, text.WebPage.Document.FileName);
-                    }
-                    else if (text.WebPage != null && text.WebPage.Sticker != null)
-                    {
-                        return (text.WebPage.Sticker.StickerValue, null);
-                    }
-                    else if (text.WebPage != null && text.WebPage.Video != null)
-                    {
-                        return (text.WebPage.Video.VideoValue, text.WebPage.Video.FileName);
-                    }
-                    else if (text.WebPage != null && text.WebPage.VideoNote != null)
-                    {
-                        return (text.WebPage.VideoNote.Video, null);
-                    }
-                    else if (text.WebPage != null && text.WebPage.VoiceNote != null)
-                    {
-                        return (text.WebPage.VoiceNote.Voice, null);
-                    }
-                    else if (text.WebPage != null && text.WebPage.Photo != null && allowPhoto)
-                    {
-                        var big = text.WebPage.Photo.GetBig();
-                        if (big != null)
-                        {
-                            return (big.Photo, null);
-                        }
-                    }
-                    break;
-                case MessageVideo video:
-                    return (video.Video.VideoValue, video.Video.FileName);
-                case MessageVideoNote videoNote:
-                    return (videoNote.VideoNote.Video, null);
-                case MessageVoiceNote voiceNote:
-                    return (voiceNote.VoiceNote.Voice, null);
-            }
-
-            return (null, null);
         }
 
         public static (File File, Thumbnail Thumbnail, string FileName) GetFileAndThumbnailAndName(this Message message, bool allowPhoto)
@@ -699,63 +530,17 @@ namespace Unigram.Common
 
         public static File GetFile(this MessageViewModel message)
         {
-            var content = message.GeneratedContent ?? message.Content;
-            switch (content)
-            {
-                case MessageAnimation animation:
-                    return animation.Animation.AnimationValue;
-                case MessageAudio audio:
-                    return audio.Audio.AudioValue;
-                case MessageDocument document:
-                    return document.Document.DocumentValue;
-                case MessageGame game:
-                    return game.Game.Animation?.AnimationValue;
-                case MessageSticker sticker:
-                    return sticker.Sticker.StickerValue;
-                case MessageText text:
-                    if (text.WebPage != null && text.WebPage.Animation != null)
-                    {
-                        return text.WebPage.Animation.AnimationValue;
-                    }
-                    else if (text.WebPage != null && text.WebPage.Audio != null)
-                    {
-                        return text.WebPage.Audio.AudioValue;
-                    }
-                    else if (text.WebPage != null && text.WebPage.Document != null)
-                    {
-                        return text.WebPage.Document.DocumentValue;
-                    }
-                    else if (text.WebPage != null && text.WebPage.Sticker != null)
-                    {
-                        return text.WebPage.Sticker.StickerValue;
-                    }
-                    else if (text.WebPage != null && text.WebPage.Video != null)
-                    {
-                        return text.WebPage.Video.VideoValue;
-                    }
-                    else if (text.WebPage != null && text.WebPage.VideoNote != null)
-                    {
-                        return text.WebPage.VideoNote.Video;
-                    }
-                    else if (text.WebPage != null && text.WebPage.VoiceNote != null)
-                    {
-                        return text.WebPage.VoiceNote.Voice;
-                    }
-                    break;
-                case MessageVideo video:
-                    return video.Video.VideoValue;
-                case MessageVideoNote videoNote:
-                    return videoNote.VideoNote.Video;
-                case MessageVoiceNote voiceNote:
-                    return voiceNote.VoiceNote.Voice;
-            }
-
-            return null;
+            return GetFile(message.GeneratedContent ?? message.Content);
         }
 
         public static File GetFile(this Message message)
         {
-            switch (message.Content)
+            return GetFile(message.Content);
+        }
+
+        public static File GetFile(this MessageContent content)
+        {
+            switch (content)
             {
                 case MessageAnimation animation:
                     return animation.Animation.AnimationValue;
@@ -764,7 +549,17 @@ namespace Unigram.Common
                 case MessageDocument document:
                     return document.Document.DocumentValue;
                 case MessageGame game:
-                    return game.Game.Animation?.AnimationValue;
+                    if (game.Game.Animation != null)
+                    {
+                        return game.Game.Animation.AnimationValue;
+                    }
+                    else if (game.Game.Photo != null)
+                    {
+                        return game.Game.Photo.GetBig()?.Photo;
+                    }
+                    break;
+                case MessagePhoto photo:
+                    return photo.Photo.GetBig()?.Photo;
                 case MessageSticker sticker:
                     return sticker.Sticker.StickerValue;
                 case MessageText text:
@@ -796,6 +591,10 @@ namespace Unigram.Common
                     {
                         return text.WebPage.VoiceNote.Voice;
                     }
+                    else if (text.WebPage != null && text.WebPage.Photo != null)
+                    {
+                        return text.WebPage.Photo.GetBig()?.Photo;
+                    }
                     break;
                 case MessageVideo video:
                     return video.Video.VideoValue;
@@ -808,33 +607,42 @@ namespace Unigram.Common
             return null;
         }
 
-        public static File GetAnimation(this Message message)
-        {
-            switch (message.Content)
-            {
-                case MessageAnimation animation:
-                    return animation.Animation.AnimationValue;
-                case MessageGame game:
-                    return game.Game.Animation?.AnimationValue;
-                case MessageText text:
-                    return text.WebPage?.Animation?.AnimationValue;
-
-                case MessageVideoNote videoNote:
-                    return videoNote.VideoNote.Video;
-                default:
-                    return null;
-            }
-        }
-
-        public static bool IsAnimatedStickerDownloadCompleted(this MessageViewModel message)
+        public static bool IsAnimatedContentDownloadCompleted(this MessageViewModel message)
         {
             var content = message.GeneratedContent ?? message.Content;
             switch (content)
             {
+                case MessageAnimation animation:
+                    return animation.Animation.AnimationValue.Local.IsDownloadingCompleted;
                 case MessageSticker sticker:
-                    return (sticker.Sticker.Type is StickerTypeAnimated || sticker.Sticker.Type is StickerTypeVideo) ? sticker.Sticker.StickerValue.Local.IsDownloadingCompleted : false;
+                    return sticker.Sticker.Type is StickerTypeAnimated or StickerTypeVideo && sticker.Sticker.StickerValue.Local.IsDownloadingCompleted;
+                case MessageVideoNote videoNote:
+                    return videoNote.VideoNote.Video.Local.IsDownloadingCompleted;
+                case MessageGame game:
+                    if (game.Game.Animation != null)
+                    {
+                        return game.Game.Animation.AnimationValue.Local.IsDownloadingCompleted;
+                    }
+                    return false;
                 case MessageText text:
-                    return (text.WebPage?.Sticker is Sticker myStick && (myStick.Type is StickerTypeAnimated || myStick.Type is StickerTypeVideo)) ? text.WebPage.Sticker.StickerValue.Local.IsDownloadingCompleted : false;
+                    if (text.WebPage?.Animation != null)
+                    {
+                        return text.WebPage.Animation.AnimationValue.Local.IsDownloadingCompleted;
+                    }
+                    else if (text.WebPage?.Sticker != null)
+                    {
+                        return text.WebPage.Sticker.Type is StickerTypeAnimated or StickerTypeVideo && text.WebPage.Sticker.StickerValue.Local.IsDownloadingCompleted;
+                    }
+                    else if (text.WebPage?.VideoNote != null)
+                    {
+                        return text.WebPage.VideoNote.Video.Local.IsDownloadingCompleted;
+                    }
+                    else if (text.WebPage?.Video != null)
+                    {
+                        // Videos are streamed
+                        return true;
+                    }
+                    return false;
                 case MessageDice dice:
                     var state = dice.InitialState;
                     if (state is DiceStickersRegular regular)
@@ -851,6 +659,9 @@ namespace Unigram.Common
                     }
 
                     return false;
+                case MessageVideo:
+                    // Videos are streamed
+                    return true;
                 default:
                     return false;
             }
@@ -907,19 +718,6 @@ namespace Unigram.Common
             return false;
         }
 
-        public static File GetAnimatedSticker(this Message message)
-        {
-            switch (message.Content)
-            {
-                case MessageSticker sticker:
-                    return (sticker.Sticker.Type is StickerTypeAnimated || sticker.Sticker.Type is StickerTypeVideo) ? sticker.Sticker.StickerValue : null;
-                case MessageText text:
-                    return (text.WebPage?.Sticker is Sticker myStick && (myStick.Type is StickerTypeAnimated || myStick.Type is StickerTypeVideo)) ? text.WebPage?.Sticker?.StickerValue : null;
-                default:
-                    return null;
-            }
-        }
-
         public static Thumbnail GetThumbnail(this Message message)
         {
             switch (message.Content)
@@ -969,7 +767,7 @@ namespace Unigram.Common
             return null;
         }
 
-        public static Minithumbnail GetMinithumbnail(this Message message, bool secret)
+        public static Minithumbnail GetMinithumbnail(this Message message, bool secret = false)
         {
             switch (message.Content)
             {
@@ -1018,6 +816,11 @@ namespace Unigram.Common
             return null;
         }
 
+        public static FormattedText GetCaption(this MessageViewModel message)
+        {
+            return message.Content.GetCaption();
+        }
+
         public static FormattedText GetCaption(this Message message)
         {
             return message.Content.GetCaption();
@@ -1025,31 +828,19 @@ namespace Unigram.Common
 
         public static FormattedText GetCaption(this MessageContent content)
         {
-            switch (content)
+            return content switch
             {
-                case MessageAlbum album:
-                    return album.Caption;
-                case MessageAnimation animation:
-                    return animation.Caption;
-                case MessageAudio audio:
-                    return audio.Caption;
-                case MessageDocument document:
-                    return document.Caption;
-                case MessagePhoto photo:
-                    return photo.Caption;
-                case MessageVideo video:
-                    return video.Caption;
-                case MessageVoiceNote voiceNote:
-                    return voiceNote.Caption;
-
-                case MessageBigEmoji bigEmoji:
-                    return bigEmoji.Text;
-
-                case MessageText text:
-                    return text.Text;
-            }
-
-            return null;
+                MessageAlbum album => album.Caption,
+                MessageAnimation animation => animation.Caption,
+                MessageAudio audio => audio.Caption,
+                MessageDocument document => document.Caption,
+                MessagePhoto photo => photo.Caption,
+                MessageVideo video => video.Caption,
+                MessageVoiceNote voiceNote => voiceNote.Caption,
+                MessageBigEmoji bigEmoji => bigEmoji.Text,
+                MessageText text => text.Text,
+                _ => null,
+            };
         }
 
         public static bool HasCaption(this MessageContent content)
@@ -1075,6 +866,11 @@ namespace Unigram.Common
 
         public static bool IsMedia(this WebPage webPage)
         {
+            if (string.Equals(webPage.Type, "telegram_background", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
             return webPage.Animation != null || webPage.Audio != null || webPage.Document != null || webPage.Sticker != null || webPage.Video != null || webPage.VideoNote != null || webPage.VoiceNote != null || webPage.IsPhoto();
         }
 
@@ -1084,6 +880,9 @@ namespace Unigram.Common
             {
                 if (string.Equals(webPage.Type, "photo", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(webPage.Type, "video", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(webPage.Type, "embed", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(webPage.Type, "gif", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(webPage.Type, "document", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(webPage.Type, "telegram_album", StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
@@ -1093,11 +892,11 @@ namespace Unigram.Common
                     var photo = webPage.Photo;
                     var big = photo.GetBig();
 
-                    return big != null && big.Width > 400 && webPage.InstantViewVersion != 0;
+                    return big != null && big.Width > 256 && webPage.InstantViewVersion != 0;
                 }
             }
 
-            return webPage.Photo != null;
+            return false;
         }
 
         public static bool IsSmallPhoto(this WebPage webPage)
@@ -1135,39 +934,40 @@ namespace Unigram.Common
         {
             switch (message.Content)
             {
-                case MessageBasicGroupChatCreate basicGroupChatCreate:
-                case MessageChatAddMembers chatAddMembers:
-                case MessageChatChangePhoto chatChangePhoto:
-                case MessageChatChangeTitle chatChangeTitle:
-                case MessageChatSetTheme newTodo:
-                case MessageChatDeleteMember chatDeleteMember:
-                case MessageChatDeletePhoto chatDeletePhoto:
-                case MessageChatJoinByLink chatJoinByLink:
-                case MessageChatSetTtl chatSetTtl:
-                case MessageChatUpgradeFrom chatUpgradeFrom:
-                case MessageChatUpgradeTo chatUpgradeTo:
-                case MessageContactRegistered contactRegistered:
-                case MessageCustomServiceAction customServiceAction:
-                case MessageGameScore gameScore:
-                case MessageInviteVideoChatParticipants newTodo0:
-                case MessageProximityAlertTriggered liveLocationApproached:
-                case MessagePassportDataSent passportDataSent:
-                case MessagePaymentSuccessful paymentSuccessful:
-                case MessagePinMessage pinMessage:
-                case MessageScreenshotTaken screenshotTaken:
-                case MessageSupergroupChatCreate supergroupChatCreate:
-                case MessageVideoChatEnded newTodo1:
-                case MessageVideoChatScheduled newTodo2:
-                case MessageVideoChatStarted newTodo3:
-                case MessageWebsiteConnected websiteConnected:
+                case MessageBasicGroupChatCreate:
+                case MessageChatAddMembers:
+                case MessageChatChangePhoto:
+                case MessageChatChangeTitle:
+                case MessageChatSetTheme:
+                case MessageChatDeleteMember:
+                case MessageChatDeletePhoto:
+                case MessageChatJoinByLink:
+                case MessageChatJoinByRequest:
+                case MessageChatSetTtl:
+                case MessageChatUpgradeFrom:
+                case MessageChatUpgradeTo:
+                case MessageContactRegistered:
+                case MessageCustomServiceAction:
+                case MessageGameScore:
+                case MessageInviteVideoChatParticipants:
+                case MessageProximityAlertTriggered:
+                case MessagePassportDataSent:
+                case MessagePaymentSuccessful:
+                case MessagePinMessage:
+                case MessageScreenshotTaken:
+                case MessageSupergroupChatCreate:
+                case MessageVideoChatEnded:
+                case MessageVideoChatScheduled:
+                case MessageVideoChatStarted:
+                case MessageWebsiteConnected:
                     return true;
-                case MessageExpiredPhoto expiredPhoto:
-                case MessageExpiredVideo expiredVideo:
+                case MessageExpiredPhoto:
+                case MessageExpiredVideo:
                     return true;
                 // Local types:
-                case MessageChatEvent chatEvent:
-                case MessageHeaderDate headerDate:
-                case MessageHeaderUnread headerUnread:
+                case MessageChatEvent:
+                case MessageHeaderDate:
+                case MessageHeaderUnread:
                     return true;
                 default:
                     return false;
@@ -1178,8 +978,8 @@ namespace Unigram.Common
         {
             switch (result)
             {
-                case InlineQueryResultAnimation animation:
-                case InlineQueryResultPhoto photo:
+                case InlineQueryResultAnimation:
+                case InlineQueryResultPhoto:
                     return true;
                 case InlineQueryResultVideo video:
                     return string.IsNullOrEmpty(video.Title);
@@ -1221,39 +1021,27 @@ namespace Unigram.Common
             }
         }
 
-        public static string GetRestrictionReason(this User user)
+        public static File GetThumbnail(this StickerSetInfo stickerSet, out IList<ClosedVectorPath> outline, out StickerType type)
         {
-            return GetRestrictionReason(user.RestrictionReason);
-        }
-
-        public static string GetRestrictionReason(this Supergroup supergroup)
-        {
-            return GetRestrictionReason(supergroup.RestrictionReason);
-        }
-
-        public static string GetRestrictionReason(string reason)
-        {
-            if (reason.Length > 0)
+            if (stickerSet.Thumbnail != null)
             {
-                var fullTypeEnd = reason.IndexOf(':');
-                if (fullTypeEnd <= 0)
-                {
-                    return null;
-                }
+                outline = stickerSet.ThumbnailOutline;
+                type = stickerSet.StickerType;
 
-                // {fulltype} is in "{type}-{tag}-{tag}-{tag}" format
-                // if we find "all" tag we return the restriction string
-                var typeTags = reason.Substring(0, fullTypeEnd).Split('-');
-#if STORE_RESTRICTIVE
-                var restrictionApplies = typeTags.Contains("all") || typeTags.Contains("ios");
-#else
-                var restrictionApplies = typeTags.Contains("all");
-#endif
-                if (restrictionApplies)
-                {
-                    return reason.Substring(fullTypeEnd + 1).Trim();
-                }
+                return stickerSet.Thumbnail.File;
             }
+
+            var cover = stickerSet.Covers.FirstOrDefault();
+            if (cover != null)
+            {
+                outline = cover.Outline;
+                type = cover.Type;
+
+                return cover.StickerValue;
+            }
+
+            outline = null;
+            type = null;
 
             return null;
         }
@@ -1284,9 +1072,14 @@ namespace Unigram.Common
             var performer = string.IsNullOrEmpty(audio.Performer) ? null : audio.Performer;
             var title = string.IsNullOrEmpty(audio.Title) ? null : audio.Title;
 
-            if (performer == null || title == null)
+            if (performer == null)
             {
-                return audio.FileName;
+                if (title == null)
+                {
+                    return audio.FileName;
+                }
+
+                return title;
             }
             else
             {
@@ -1344,15 +1137,15 @@ namespace Unigram.Common
             {
                 switch (call.NetworkType)
                 {
-                    case NetworkTypeMobile mobile:
+                    case NetworkTypeMobile:
                         return TdNetworkType.Mobile;
-                    case NetworkTypeMobileRoaming mobileRoaming:
+                    case NetworkTypeMobileRoaming:
                         return TdNetworkType.MobileRoaming;
-                    case NetworkTypeNone none:
+                    case NetworkTypeNone:
                         return TdNetworkType.None;
-                    case NetworkTypeOther other:
+                    case NetworkTypeOther:
                     //return TdNetworkType.Other;
-                    case NetworkTypeWiFi wifi:
+                    case NetworkTypeWiFi:
                         return TdNetworkType.WiFi;
                 }
             }
@@ -1360,15 +1153,15 @@ namespace Unigram.Common
             {
                 switch (file.NetworkType)
                 {
-                    case NetworkTypeMobile mobile:
+                    case NetworkTypeMobile:
                         return TdNetworkType.Mobile;
-                    case NetworkTypeMobileRoaming mobileRoaming:
+                    case NetworkTypeMobileRoaming:
                         return TdNetworkType.MobileRoaming;
-                    case NetworkTypeNone none:
+                    case NetworkTypeNone:
                         return TdNetworkType.None;
-                    case NetworkTypeOther other:
+                    case NetworkTypeOther:
                     //return TdNetworkType.Other;
-                    case NetworkTypeWiFi wifi:
+                    case NetworkTypeWiFi:
                         return TdNetworkType.WiFi;
                 }
             }
@@ -1400,25 +1193,39 @@ namespace Unigram.Common
             return sender is MessageSenderChat chat && chat.ChatId == chatId;
         }
 
+        public static long ComparaTo(this MessageSender sender, MessageSender compare)
+        {
+            if (sender is MessageSenderUser user1 && compare is MessageSenderUser user2)
+            {
+                return user1.UserId - user2.UserId;
+            }
+            else if (sender is MessageSenderChat chat1 && compare is MessageSenderChat chat2)
+            {
+                return chat1.ChatId - chat2.ChatId;
+            }
+
+            return -1;
+        }
+
         public static bool IsSaved(this Message message, long savedMessagesId)
         {
-            if (message.ForwardInfo?.Origin is MessageForwardOriginUser fromUser)
+            if (message.ForwardInfo?.Origin is MessageForwardOriginUser)
             {
                 return message.ForwardInfo.FromChatId != 0;
             }
-            else if (message.ForwardInfo?.Origin is MessageForwardOriginChat fromChat)
+            else if (message.ForwardInfo?.Origin is MessageForwardOriginChat)
             {
                 return message.ForwardInfo.FromChatId != 0;
             }
-            else if (message.ForwardInfo?.Origin is MessageForwardOriginChannel fromChannel)
+            else if (message.ForwardInfo?.Origin is MessageForwardOriginChannel)
             {
                 return message.ForwardInfo.FromChatId != 0;
             }
-            else if (message.ForwardInfo?.Origin is MessageForwardOriginMessageImport fromImport)
+            else if (message.ForwardInfo?.Origin is MessageForwardOriginMessageImport)
             {
                 return true;
             }
-            else if (message.ForwardInfo?.Origin is MessageForwardOriginHiddenUser fromHiddenUser)
+            else if (message.ForwardInfo?.Origin is MessageForwardOriginHiddenUser)
             {
                 return message.ChatId == savedMessagesId;
             }
@@ -1489,60 +1296,24 @@ namespace Unigram.Common
 
         public static PhotoSize GetSmall(this Photo photo)
         {
-            var local = photo.Sizes.FirstOrDefault(x => string.Equals(x.Type, "t"));
-            if (local != null)
-            {
-                return local;
-            }
-
-            return photo.Sizes.OrderBy(x => x.Width).FirstOrDefault();
-        }
-
-        public static PhotoSize GetBig(this Photo photo)
-        {
-            //var local = photo.Sizes.FirstOrDefault(x => string.Equals(x.Type, "i"));
+            //var local = photo.Sizes.FirstOrDefault(x => string.Equals(x.Type, "t"));
             //if (local != null && (local.Photo.Local.IsDownloadingCompleted || local.Photo.Local.CanBeDownloaded))
             //{
             //    return local;
             //}
 
-            //return photo.Sizes.Where(x => !string.Equals(x.Type, "i")).OrderByDescending(x => x.Width).FirstOrDefault();
+            return photo.Sizes.FirstOrDefault(x => x.Photo.Local.IsDownloadingCompleted || x.Photo.Local.CanBeDownloaded);
+        }
 
-            PhotoSize full = null;
-            int fullLevel = -1;
+        public static PhotoSize GetBig(this Photo photo)
+        {
+            //var local = photo.Sizes.LastOrDefault(x => string.Equals(x.Type, "i"));
+            //if (local != null && (local.Photo.Local.IsDownloadingCompleted || local.Photo.Local.CanBeDownloaded))
+            //{
+            //    return local;
+            //}
 
-            foreach (var i in photo.Sizes)
-            {
-                var size = i.Type.Length > 0 ? i.Type[0] : 'z';
-                int newFullLevel = -1;
-
-                switch (size)
-                {
-                    case 's': newFullLevel = 5; break; // box 100x100
-                    case 'm': newFullLevel = 4; break; // box 320x320
-                    case 'x': newFullLevel = 2; break; // box 800x800
-                    case 'y': newFullLevel = 1; break; // box 1280x1280
-                    case 'w': newFullLevel = 3; break; // box 2560x2560
-                    case 'a': newFullLevel = 9; break; // crop 160x160
-                    case 'b': newFullLevel = 8; break; // crop 320x320
-                    case 'c': newFullLevel = 7; break; // crop 640x640
-                    case 'd': newFullLevel = 6; break; // crop 1280x1280
-                    case 'i': newFullLevel = i.Photo.Local.IsDownloadingCompleted || i.Photo.Local.CanBeDownloaded ? 0 : 10; break;
-                    case 'u': newFullLevel = 10; break;
-                }
-
-                if (newFullLevel < 0)
-                {
-                    continue;
-                }
-                if (fullLevel < 0 || newFullLevel < fullLevel)
-                {
-                    fullLevel = newFullLevel;
-                    full = i;
-                }
-            }
-
-            return full;
+            return photo.Sizes.LastOrDefault(x => x.Photo.Local.IsDownloadingCompleted || x.Photo.Local.CanBeDownloaded);
         }
 
         public static PhotoSize GetSmall(this ChatPhoto photo)
@@ -1553,53 +1324,79 @@ namespace Unigram.Common
             //    return local;
             //}
 
-            //return photo.Sizes.Where(x => !string.Equals(x.Type, "t")).OrderBy(x => x.Width).FirstOrDefault();
-
-            PhotoSize thumb = null;
-            int thumbLevel = -1;
-
-            foreach (var i in photo.Sizes)
-            {
-                var size = i.Type.Length > 0 ? i.Type[0] : 'z';
-                int newThumbLevel = -1;
-
-                switch (size)
-                {
-                    case 's': newThumbLevel = 1; break; // box 100x100
-                    case 'm': newThumbLevel = 3; break; // box 320x320
-                    case 'x': newThumbLevel = 6; break; // box 800x800
-                    case 'y': newThumbLevel = 7; break; // box 1280x1280
-                    case 'w': newThumbLevel = 9; break; // box 2560x2560
-                    case 'a': newThumbLevel = 2; break; // crop 160x160
-                    case 'b': newThumbLevel = 4; break; // crop 320x320
-                    case 'c': newThumbLevel = 5; break; // crop 640x640
-                    case 'd': newThumbLevel = 8; break; // crop 1280x1280
-                    case 't': newThumbLevel = i.Photo.Local.IsDownloadingCompleted || i.Photo.Local.CanBeDownloaded ? 0 : 10; break;
-                }
-
-                if (newThumbLevel < 0)
-                {
-                    continue;
-                }
-                if (thumbLevel < 0 || newThumbLevel < thumbLevel)
-                {
-                    thumbLevel = newThumbLevel;
-                    thumb = i;
-                }
-            }
-
-            return thumb;
+            return photo.Sizes.FirstOrDefault(x => x.Photo.Local.IsDownloadingCompleted || x.Photo.Local.CanBeDownloaded);
         }
 
         public static PhotoSize GetBig(this ChatPhoto photo)
         {
-            var local = photo.Sizes.FirstOrDefault(x => string.Equals(x.Type, "i"));
-            if (local != null)
+            //var local = photo.Sizes.LastOrDefault(x => string.Equals(x.Type, "i"));
+            //if (local != null && (local.Photo.Local.IsDownloadingCompleted || local.Photo.Local.CanBeDownloaded))
+            //{
+            //    return local;
+            //}
+
+            return photo.Sizes.LastOrDefault(x => x.Photo.Local.IsDownloadingCompleted || x.Photo.Local.CanBeDownloaded);
+        }
+
+        public static string GetStartsAt(this MessageVideoChatScheduled messageVideoChatScheduled)
+        {
+            var date = Converters.Converter.DateTime(messageVideoChatScheduled.StartDate);
+            return string.Format(Strings.Resources.formatDateAtTime, Converters.Converter.ShortDate.Format(date), Converters.Converter.ShortTime.Format(date));
+        }
+
+        public static string GetStartsAt(this GroupCall groupCall)
+        {
+            var date = Converters.Converter.DateTime(groupCall.ScheduledStartDate);
+            if (date.Date == DateTime.Today)
             {
-                return local;
+                return string.Format(Strings.Resources.TodayAtFormattedWithToday, Converters.Converter.ShortTime.Format(date));
+            }
+            else if (date.Date.AddDays(1) == DateTime.Today)
+            {
+                return string.Format(Strings.Resources.YesterdayAtFormatted, Converters.Converter.ShortTime.Format(date));
             }
 
-            return photo.Sizes.OrderByDescending(x => x.Width).FirstOrDefault();
+            return string.Format(Strings.Resources.formatDateAtTime, Converters.Converter.ShortDate.Format(date), Converters.Converter.ShortTime.Format(date));
+        }
+
+        public static string GetStartsIn(this GroupCall groupCall)
+        {
+            var date = Converters.Converter.DateTime(groupCall.ScheduledStartDate);
+            var duration = date - DateTime.Now;
+
+            if (Math.Abs(duration.TotalDays) >= 7)
+            {
+                return Locale.Declension("Weeks", 1);
+            }
+            if (Math.Abs(duration.TotalDays) >= 1)
+            {
+                return Locale.Declension("Days", (int)duration.TotalDays);
+            }
+            else if (Math.Abs(duration.TotalHours) >= 1)
+            {
+                return (duration.TotalSeconds < 0 ? "-" : "") + duration.ToString("h\\:mm\\:ss");
+            }
+            else
+            {
+                return (duration.TotalSeconds < 0 ? "-" : "") + duration.ToString("mm\\:ss");
+            }
+        }
+
+        public static string GetDuration(this MessageVideoChatEnded videoChatEnded)
+        {
+            var duration = TimeSpan.FromSeconds(videoChatEnded.Duration);
+            if (duration.TotalDays >= 1)
+            {
+                return Locale.Declension("Days", (int)duration.TotalDays);
+            }
+            else if (duration.TotalHours >= 1)
+            {
+                return duration.ToString("h\\:mm\\:ss");
+            }
+            else
+            {
+                return duration.ToString("mm\\:ss");
+            }
         }
 
         public static string GetDuration(this Video video)
@@ -1666,10 +1463,10 @@ namespace Unigram.Common
                 return false;
             }
 
-            return supergroup.Status is ChatMemberStatusCreator ||
-                supergroup.Status is ChatMemberStatusAdministrator ||
-                supergroup.Status is ChatMemberStatusMember ||
-                supergroup.Status is ChatMemberStatusRestricted;
+            return supergroup.Status is ChatMemberStatusCreator or
+                ChatMemberStatusAdministrator or
+                ChatMemberStatusMember or
+                ChatMemberStatusRestricted;
         }
 
         public static int Count(this ChatPermissions permissions)
@@ -1766,6 +1563,26 @@ namespace Unigram.Common
             return supergroup.Status is ChatMemberStatusCreator || supergroup.Status is ChatMemberStatusAdministrator administrator && administrator.CanChangeInfo;
         }
 
+        public static bool CanManageVideoChats(this Supergroup supergroup)
+        {
+            if (supergroup.Status == null)
+            {
+                return false;
+            }
+
+            return supergroup.Status is ChatMemberStatusCreator || supergroup.Status is ChatMemberStatusAdministrator administrator && administrator.CanManageVideoChats;
+        }
+
+        public static bool CanManageVideoChats(this BasicGroup basicGroup)
+        {
+            if (basicGroup.Status == null)
+            {
+                return false;
+            }
+
+            return basicGroup.Status is ChatMemberStatusCreator || basicGroup.Status is ChatMemberStatusAdministrator administrator && administrator.CanManageVideoChats;
+        }
+
         public static bool CanPostMessages(this Supergroup supergroup)
         {
             if (supergroup.Status == null)
@@ -1779,7 +1596,7 @@ namespace Unigram.Common
             }
             else
             {
-                return supergroup.Status is ChatMemberStatusCreator || supergroup.Status is ChatMemberStatusAdministrator administrator || supergroup.Status is ChatMemberStatusMember;
+                return supergroup.Status is ChatMemberStatusCreator or ChatMemberStatusAdministrator or ChatMemberStatusMember;
             }
         }
 
@@ -1855,543 +1672,13 @@ namespace Unigram.Common
                 return false;
             }
 
-            return basicGroup.Status is ChatMemberStatusCreator || basicGroup.Status is ChatMemberStatusAdministrator administrator || basicGroup.Status is ChatMemberStatusMember;
-        }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        public static bool UpdateFile(this Thumbnail thumbnail, File file)
-        {
-            if (thumbnail.File.Id == file.Id)
-            {
-                thumbnail.File = file;
-                return true;
-            }
-
-            return false;
-        }
-
-        public static bool UpdateFile(this PhotoSize size, File file)
-        {
-            if (size.Photo.Id == file.Id)
-            {
-                size.Photo = file;
-                return true;
-            }
-
-            return false;
-        }
-
-        public static bool UpdateFile(this Chat chat, File file)
-        {
-            var any = false;
-            if (chat.Photo != null)
-            {
-                if (chat.Photo.Small.Id == file.Id)
-                {
-                    chat.Photo.Small = file;
-                    any = true;
-                }
-
-                if (chat.Photo.Big.Id == file.Id)
-                {
-                    chat.Photo.Big = file;
-                    any = true;
-                }
-            }
-
-            return any;
-        }
-
-        public static bool UpdateFile(this User user, File file)
-        {
-            var any = false;
-            if (user.ProfilePhoto != null)
-            {
-                if (user.ProfilePhoto.Small.Id == file.Id)
-                {
-                    user.ProfilePhoto.Small = file;
-                    any = true;
-                }
-
-                if (user.ProfilePhoto.Big.Id == file.Id)
-                {
-                    user.ProfilePhoto.Big = file;
-                    any = true;
-                }
-            }
-
-            return any;
-        }
-
-        public static bool UpdateFile(this Message message, File file)
-        {
-            switch (message.Content)
-            {
-                case MessageAlbum album:
-                    return album.UpdateFile(file);
-                case MessageAnimation animation:
-                    return animation.UpdateFile(file);
-                case MessageAudio audio:
-                    return audio.UpdateFile(file);
-                case MessageDice dice:
-                    return dice.UpdateFile(file);
-                case MessageDocument document:
-                    return document.UpdateFile(file);
-                case MessageGame game:
-                    return game.UpdateFile(file);
-                case MessageInvoice invoice:
-                    return invoice.UpdateFile(file);
-                case MessagePhoto photo:
-                    return photo.UpdateFile(file);
-                case MessageSticker sticker:
-                    return sticker.UpdateFile(file);
-                case MessageText text:
-                    return text.UpdateFile(file);
-                case MessageVideo video:
-                    return video.UpdateFile(file);
-                case MessageVideoNote videoNote:
-                    return videoNote.UpdateFile(file);
-                case MessageVoiceNote voiceNote:
-                    return voiceNote.UpdateFile(file);
-                case MessageChatChangePhoto chatChangePhoto:
-                    return chatChangePhoto.UpdateFile(file);
-                default:
-                    return false;
-            }
+            return basicGroup.Status is ChatMemberStatusCreator or ChatMemberStatusAdministrator or ChatMemberStatusMember;
         }
 
         public static bool UpdateFile(this InlineQueryResult result, File file)
         {
-            switch (result)
-            {
-                case InlineQueryResultAnimation animation:
-                    return animation.Animation.UpdateFile(file);
-                case InlineQueryResultArticle article:
-                    return article.Thumbnail?.UpdateFile(file) ?? false;
-                case InlineQueryResultAudio audio:
-                    return audio.Audio.UpdateFile(file);
-                case InlineQueryResultContact contact:
-                    return contact.Thumbnail?.UpdateFile(file) ?? false;
-                case InlineQueryResultDocument document:
-                    return document.Document.UpdateFile(file);
-                case InlineQueryResultGame game:
-                    return game.Game.UpdateFile(file);
-                case InlineQueryResultLocation location:
-                    return location.Thumbnail?.UpdateFile(file) ?? false;
-                case InlineQueryResultPhoto photo:
-                    return photo.Photo.UpdateFile(file);
-                case InlineQueryResultSticker sticker:
-                    return sticker.Sticker.UpdateFile(file);
-                case InlineQueryResultVenue venue:
-                    return venue.Thumbnail?.UpdateFile(file) ?? false;
-                case InlineQueryResultVideo video:
-                    return video.Video.UpdateFile(file);
-                case InlineQueryResultVoiceNote voiceNote:
-                    return voiceNote.VoiceNote.UpdateFile(file);
-                default:
-                    return false;
-            }
-        }
-
-
-
-        public static bool UpdateFile(this MessageAnimation animation, File file)
-        {
-            return animation.Animation.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Animation animation, File file)
-        {
-            var any = false;
-            if (animation.Thumbnail != null && animation.Thumbnail.File.Id == file.Id)
-            {
-                animation.Thumbnail.File = file;
-                any = true;
-            }
-
-            if (animation.AnimationValue.Id == file.Id)
-            {
-                animation.AnimationValue = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageAudio audio, File file)
-        {
-            return audio.Audio.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Audio audio, File file)
-        {
-            var any = false;
-            if (audio.AlbumCoverThumbnail != null && audio.AlbumCoverThumbnail.File.Id == file.Id)
-            {
-                audio.AlbumCoverThumbnail.File = file;
-                any = true;
-            }
-
-            if (audio.AudioValue.Id == file.Id)
-            {
-                audio.AudioValue = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageDice dice, File file)
-        {
-            var initial = dice.InitialState?.UpdateFile(file) ?? false;
-            var final = dice.FinalState?.UpdateFile(file) ?? false;
-
-            return initial || final;
-        }
-
-        public static bool UpdateFile(this DiceStickers state, File file)
-        {
-            if (state is DiceStickersRegular regular)
-            {
-                return regular.Sticker.UpdateFile(file);
-            }
-            else if (state is DiceStickersSlotMachine slotMachine)
-            {
-                var background = slotMachine.Background.UpdateFile(file);
-                var left = slotMachine.LeftReel.UpdateFile(file);
-                var center = slotMachine.CenterReel.UpdateFile(file);
-                var right = slotMachine.RightReel.UpdateFile(file);
-                var lever = slotMachine.Lever.UpdateFile(file);
-
-                return background || left || center || right || lever;
-            }
-
             return false;
         }
-
-
-
-        public static bool UpdateFile(this MessageDocument document, File file)
-        {
-            return document.Document.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Document document, File file)
-        {
-            var any = false;
-            if (document.Thumbnail != null && document.Thumbnail.File.Id == file.Id)
-            {
-                document.Thumbnail.File = file;
-                any = true;
-            }
-
-            if (document.DocumentValue.Id == file.Id)
-            {
-                document.DocumentValue = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageGame game, File file)
-        {
-            return game.Game.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Game game, File file)
-        {
-            var any = false;
-            if (game.Animation != null && game.Animation.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (game.Photo != null && game.Photo.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageInvoice invoice, File file)
-        {
-            if (invoice.Photo != null)
-            {
-                return invoice.Photo.UpdateFile(file);
-            }
-
-            return false;
-        }
-
-
-
-        public static bool UpdateFile(this MessageAlbum album, File file)
-        {
-            var any = false;
-            foreach (var message in album.Messages)
-            {
-                if (message.UpdateFile(file))
-                {
-                    any = true;
-                }
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessagePhoto photo, File file)
-        {
-            return photo.Photo.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Photo photo, File file)
-        {
-            var any = false;
-            foreach (var size in photo.Sizes)
-            {
-                if (size.Photo.Id == file.Id)
-                {
-                    size.Photo = file;
-                    any = true;
-                }
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this ChatPhotoInfo photo, File file)
-        {
-            var any = false;
-            if (photo.Small.Id == file.Id)
-            {
-                photo.Small = file;
-                any = true;
-            }
-
-            if (photo.Big.Id == file.Id)
-            {
-                photo.Big = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-        public static bool UpdateFile(this ChatPhoto photo, File file)
-        {
-            var any = false;
-            foreach (var size in photo.Sizes)
-            {
-                if (size.Photo.Id == file.Id)
-                {
-                    size.Photo = file;
-                    any = true;
-                }
-            }
-
-            if (photo.Animation?.File.Id == file.Id)
-            {
-                photo.Animation.File = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-
-        public static bool UpdateFile(this MessageSticker sticker, File file)
-        {
-            return sticker.Sticker.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Sticker sticker, File file)
-        {
-            if (sticker.Thumbnail != null && sticker.Thumbnail.File.Id == file.Id)
-            {
-                sticker.Thumbnail.File = file;
-                return true;
-            }
-            if (sticker.StickerValue.Id == file.Id)
-            {
-                sticker.StickerValue = file;
-                return true;
-            }
-
-            return false;
-        }
-
-
-
-        public static bool UpdateFile(this MessageText text, File file)
-        {
-            if (text.WebPage != null)
-            {
-                return text.WebPage.UpdateFile(file);
-            }
-
-            return false;
-        }
-
-        public static bool UpdateFile(this WebPage webPage, File file)
-        {
-            var any = false;
-            if (webPage.Animation != null && webPage.Animation.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.Audio != null && webPage.Audio.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.Document != null && webPage.Document.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.Photo != null && webPage.Photo.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.Sticker != null && webPage.Sticker.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.Video != null && webPage.Video.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.VideoNote != null && webPage.VideoNote.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            if (webPage.VoiceNote != null && webPage.VoiceNote.UpdateFile(file))
-            {
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageVideo video, File file)
-        {
-            return video.Video.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this Video video, File file)
-        {
-            var any = false;
-            if (video.Thumbnail != null && video.Thumbnail.File.Id == file.Id)
-            {
-                video.Thumbnail.File = file;
-                any = true;
-            }
-
-            if (video.VideoValue.Id == file.Id)
-            {
-                video.VideoValue = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageVideoNote videoNote, File file)
-        {
-            return videoNote.VideoNote.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this VideoNote videoNote, File file)
-        {
-            var any = false;
-            if (videoNote.Thumbnail != null && videoNote.Thumbnail.File.Id == file.Id)
-            {
-                videoNote.Thumbnail.File = file;
-                any = true;
-            }
-
-            if (videoNote.Video.Id == file.Id)
-            {
-                videoNote.Video = file;
-                any = true;
-            }
-
-            return any;
-        }
-
-
-
-        public static bool UpdateFile(this MessageVoiceNote voiceNote, File file)
-        {
-            return voiceNote.VoiceNote.UpdateFile(file);
-        }
-
-        public static bool UpdateFile(this VoiceNote voiceNote, File file)
-        {
-            if (voiceNote.Voice.Id == file.Id)
-            {
-                voiceNote.Voice = file;
-                return true;
-            }
-
-            return false;
-        }
-
-
-
-        public static bool UpdateFile(this MessageChatChangePhoto chatChangePhoto, File file)
-        {
-            return chatChangePhoto.Photo.UpdateFile(file);
-        }
-
-
-
         public static void Update(this File file, File update)
         {
             file.ExpectedSize = update.ExpectedSize;
@@ -2400,30 +1687,157 @@ namespace Unigram.Common
             file.Remote = update.Remote;
         }
 
-        public static void Update(this LocalFile local, LocalFile update)
+        public static File GetLocalFile(string path, string uniqueId = "")
         {
-            local.CanBeDeleted = update.CanBeDeleted;
-            local.CanBeDownloaded = update.CanBeDownloaded;
-            local.DownloadedPrefixSize = update.DownloadedPrefixSize;
-            local.DownloadedSize = update.DownloadedSize;
-            local.DownloadOffset = update.DownloadOffset;
-            local.IsDownloadingActive = update.IsDownloadingActive;
-            local.IsDownloadingCompleted = update.IsDownloadingCompleted;
-            local.Path = update.Path;
+            return new File(0, 0, 0, new LocalFile(System.IO.Path.Combine(Windows.ApplicationModel.Package.Current.InstalledLocation.Path, path), false, false, false, true, 0, 0, 0), new RemoteFile(string.Empty, uniqueId, false, false, 0));
+        }
+    }
+
+    public static class TdBackground
+    {
+        public static BackgroundType FromUri(Uri uri)
+        {
+            var slug = uri.Segments.Last();
+            var query = uri.Query.ParseQueryString();
+
+            if (TryGetColors(slug, '-', 1, 2, out int[] linear))
+            {
+                if (linear.Length > 1)
+                {
+                    query.TryGetValue("rotation", out string rotationKey);
+                    int.TryParse(rotationKey ?? string.Empty, out int rotation);
+
+                    return new BackgroundTypeFill(new BackgroundFillGradient(linear[0], linear[1], rotation));
+                }
+
+                return new BackgroundTypeFill(new BackgroundFillSolid(linear[0]));
+            }
+            else if (TryGetColors(slug, '~', 3, 4, out int[] freeform))
+            {
+                return new BackgroundTypeFill(new BackgroundFillFreeformGradient(freeform));
+            }
+            else
+            {
+                query.TryGetValue("mode", out string modeKey);
+                query.TryGetValue("bg_color", out string bg_colorKey);
+
+                var modeSplit = modeKey?.ToLower().Split('+') ?? new string[0];
+
+                BackgroundFill fill = null;
+                if (bg_colorKey != null && TryGetColors(bg_colorKey, '-', 1, 2, out int[] patternLinear))
+                {
+                    if (patternLinear.Length > 1)
+                    {
+                        query.TryGetValue("rotation", out string rotationKey);
+                        int.TryParse(rotationKey ?? string.Empty, out int rotation);
+
+                        fill = new BackgroundFillGradient(patternLinear[0], patternLinear[1], rotation);
+                    }
+                    else
+                    {
+                        fill = new BackgroundFillSolid(patternLinear[0]);
+                    }
+                }
+                else if (bg_colorKey != null && TryGetColors(bg_colorKey, '~', 3, 4, out int[] patternFreeform))
+                {
+                    fill = new BackgroundFillFreeformGradient(patternFreeform);
+                }
+
+                if (fill != null)
+                {
+                    query.TryGetValue("intensity", out string intensityKey);
+                    int.TryParse(intensityKey, out int intensity);
+
+                    return new BackgroundTypePattern(fill, Math.Abs(intensity), intensity < 0, modeSplit.Contains("motion"));
+                }
+                else
+                {
+                    return new BackgroundTypeWallpaper(modeSplit.Contains("blur"), modeSplit.Contains("motion"));
+                }
+            }
         }
 
-        public static void Update(this RemoteFile remote, RemoteFile update)
+        private static bool TryGetColors(string slug, char separator, int minimum, int maximum, out int[] colors)
         {
-            remote.Id = update.Id;
-            remote.IsUploadingActive = update.IsUploadingActive;
-            remote.IsUploadingCompleted = update.IsUploadingCompleted;
-            remote.UniqueId = update.UniqueId;
-            remote.UploadedSize = update.UploadedSize;
+            var split = slug?.Split(separator);
+            if (split != null && split.Length >= minimum && split.Length >= maximum)
+            {
+                colors = new int[split.Length];
+
+                for (int i = 0; i < split.Length; i++)
+                {
+                    if (int.TryParse(split[i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int color))
+                    {
+                        colors[i] = color;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            colors = null;
+            return false;
         }
 
-        public static File GetLocalFile(string path)
+        public static LinearGradientBrush GetGradient(int topColor, int bottomColor, int angle)
         {
-            return new File(0, 0, 0, new LocalFile(System.IO.Path.Combine(Windows.ApplicationModel.Package.Current.InstalledLocation.Path, path), false, false, false, true, 0, 0, 0), new RemoteFile(string.Empty, string.Empty, false, false, 0));
+            return GetGradient(topColor.ToColor(), bottomColor.ToColor(), angle);
+        }
+
+        public static LinearGradientBrush GetGradient(Color topColor, Color bottomColor, int angle)
+        {
+            Point topPoint;
+            Point bottomPoint;
+
+            switch (angle)
+            {
+                case 0:
+                case 360:
+                    topPoint = new Point(0.5, 0);
+                    bottomPoint = new Point(0.5, 1);
+                    break;
+                case 45:
+                default:
+                    topPoint = new Point(1, 0);
+                    bottomPoint = new Point(0, 1);
+                    break;
+                case 90:
+                    topPoint = new Point(1, 0.5);
+                    bottomPoint = new Point(0, 0.5);
+                    break;
+                case 135:
+                    topPoint = new Point(1, 1);
+                    bottomPoint = new Point(0, 0);
+                    break;
+                case 180:
+                    topPoint = new Point(0.5, 1);
+                    bottomPoint = new Point(0.5, 0);
+                    break;
+                case 225:
+                    topPoint = new Point(0, 1);
+                    bottomPoint = new Point(1, 0);
+                    break;
+                case 270:
+                    topPoint = new Point(0, 0.5);
+                    bottomPoint = new Point(1, 0.5);
+                    break;
+                case 315:
+                    topPoint = new Point(0, 0);
+                    bottomPoint = new Point(1, 1);
+                    break;
+            }
+
+            var brush = new LinearGradientBrush();
+            brush.GradientStops.Add(new GradientStop { Color = topColor, Offset = 0 });
+            brush.GradientStops.Add(new GradientStop { Color = bottomColor, Offset = 1 });
+            brush.StartPoint = topPoint;
+            brush.EndPoint = bottomPoint;
+
+            return brush;
         }
     }
 }
@@ -2479,18 +1893,18 @@ namespace Telegram.Td.Api
 
         public (Rect[], Size) GetPositionsForWidth(double w)
         {
-            var positions = _positions = _positions ?? MosaicAlbumLayout.chatMessageBubbleMosaicLayout(new Size(MAX_WIDTH, MAX_HEIGHT), GetSizes());
+            var positions = _positions ??= MosaicAlbumLayout.chatMessageBubbleMosaicLayout(new Size(MAX_WIDTH, MAX_HEIGHT), GetSizes());
 
-            var ratio = w / positions.Value.Item2.Width;
-            var rects = new Rect[positions.Value.Item1.Length];
+            var ratio = w / positions.Item2.Width;
+            var rects = new Rect[positions.Item1.Length];
 
             for (int i = 0; i < rects.Length; i++)
             {
-                var rect = positions.Value.Item1[i].Item1;
+                var rect = positions.Item1[i].Item1;
                 rects[i] = new Rect(rect.X * ratio, rect.Y * ratio, rect.Width * ratio, rect.Height * ratio);
             }
-            
-            return (rects, new Size(positions.Value.Item2.Width * ratio, positions.Value.Item2.Height * ratio));
+
+            return (rects, new Size(positions.Item2.Width * ratio, positions.Item2.Height * ratio));
         }
 
         private IEnumerable<Size> GetSizes()
@@ -2565,6 +1979,7 @@ namespace Telegram.Td.Api
                     }
                 }
             }
+
             return new Size(closestObject.Width, closestObject.Height);
         }
 

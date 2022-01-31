@@ -4,6 +4,7 @@ using System.Linq;
 using Telegram.Td.Api;
 using Unigram.Controls;
 using Unigram.ViewModels.Drawers;
+using Windows.Foundation.Collections;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Controls.Primitives;
@@ -13,68 +14,80 @@ namespace Unigram.Common
     public class AnimatedListHandler<T>
     {
         private readonly ListViewBase _listView;
-        private readonly DispatcherTimer _throttler;
+        private readonly DispatcherTimer _debouncer;
+
+        private readonly Dictionary<long, IPlayerView> _prev = new Dictionary<long, IPlayerView>();
+
+        private bool _unloaded;
 
         public AnimatedListHandler(ListViewBase listView)
         {
             _listView = listView;
-            _listView.Loaded += OnLoaded;
+            _listView.SizeChanged += OnSizeChanged;
             _listView.Unloaded += OnUnloaded;
 
-            _throttler = new DispatcherTimer();
-            _throttler.Interval = TimeSpan.FromMilliseconds(Constants.AnimatedThrottle);
-            _throttler.Tick += (s, args) =>
+            _debouncer = new DispatcherTimer();
+            _debouncer.Interval = TimeSpan.FromMilliseconds(Constants.AnimatedThrottle);
+            _debouncer.Tick += (s, args) =>
             {
-                _throttler.Stop();
+                _debouncer.Stop();
                 LoadVisibleItems(/*e.IsIntermediate*/ false);
             };
         }
 
-        public Action<int, T> DownloadFile { get; set; }
-
-        public Action<FrameworkElement, LottieView> LoadView { get; set; }
-        public Action<FrameworkElement, LottieView> UnloadView { get; set; }
-
-        private void OnLoaded(object sender, RoutedEventArgs e)
+        private void OnSizeChanged(object sender, SizeChangedEventArgs e)
         {
-            var scrollViewer = _listView.GetScrollViewer();
-            if (scrollViewer != null)
+            if (sender is ListViewBase)
             {
-                scrollViewer.ViewChanged += OnViewChanged;
-            }
+                _listView.SizeChanged -= OnSizeChanged;
+                _listView.Items.VectorChanged += OnVectorChanged;
 
-            var panel = _listView.ItemsPanelRoot;
-            if (panel != null)
+                var scrollViewer = _listView.GetScrollViewer();
+                if (scrollViewer != null)
+                {
+                    scrollViewer.ViewChanged += OnViewChanged;
+                }
+
+                var panel = _listView.ItemsPanelRoot;
+                if (panel != null)
+                {
+                    panel.SizeChanged += OnSizeChanged;
+                }
+            }
+            else if (e.PreviousSize.Width < _listView.ActualWidth || e.PreviousSize.Height < _listView.ActualHeight)
             {
-                panel.SizeChanged += OnSizeChanged;
+                _debouncer.Stop();
+                _debouncer.Start();
             }
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
-            UnloadVisibleItems();
+            UnloadItems();
         }
 
-        private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+        private void OnVectorChanged(IObservableVector<object> sender, IVectorChangedEventArgs e)
         {
-            if (e.PreviousSize.Width < _listView.ActualWidth || e.PreviousSize.Height < _listView.ActualHeight)
+            if (_unloaded)
             {
-                _throttler.Stop();
-                _throttler.Start();
+                return;
             }
+
+            _debouncer.Stop();
+            _debouncer.Start();
         }
 
         private void OnViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
         {
             LoadVisibleItems(true);
 
-            _throttler.Stop();
-            _throttler.Start();
+            _debouncer.Stop();
+            _debouncer.Start();
             return;
 
             if (e.IsIntermediate)
             {
-                _throttler.Start();
+                _debouncer.Start();
             }
             else
             {
@@ -86,14 +99,13 @@ namespace Unigram.Common
 
         public void ThrottleVisibleItems()
         {
-            _throttler.Stop();
-            _throttler.Start();
+            _debouncer.Stop();
+            _debouncer.Start();
         }
 
         public void LoadVisibleItems(bool intermediate)
         {
-            if (!Services.SettingsService.Current.Stickers.PlayStickers || !Services.SettingsService.Current.Diagnostics.AnimateStickersInPanel) return;
-            if (intermediate && _old.Count < 1)
+            if (intermediate && _prev.Count < 1)
             {
                 return;
             }
@@ -122,7 +134,7 @@ namespace Unigram.Common
                 return;
             }
 
-            var animations = new List<(SelectorItem, T)>(lastVisibleIndex - firstVisibleIndex);
+            var next = new Dictionary<long, IPlayerView>();
 
             for (int i = firstVisibleIndex; i <= lastVisibleIndex; i++)
             {
@@ -132,162 +144,122 @@ namespace Unigram.Common
                     continue;
                 }
 
+                File file = null;
+
                 var item = _listView.ItemFromContainer(container);
-                if (item is StickerViewModel viewModel && viewModel.IsAnimated)
+                if (item is StickerViewModel viewModel && viewModel.Type is StickerTypeAnimated or StickerTypeVideo)
                 {
-                    animations.Add((container, (T)(object)viewModel));
+                    file = viewModel.StickerValue;
                 }
-                else if (item is StickerSetViewModel setViewModel && setViewModel.IsAnimated)
+                else if (item is StickerSetViewModel setViewModel && setViewModel.StickerType is StickerTypeAnimated or StickerTypeVideo)
                 {
-                    animations.Add((container, (T)(object)setViewModel));
+                    file = setViewModel.Thumbnail?.File ?? setViewModel.Covers.FirstOrDefault()?.Thumbnail?.File;
                 }
-                else if (item is Sticker sticker && (sticker.Type is StickerTypeAnimated || sticker.Type is StickerTypeVideo))
+                else if (item is Sticker sticker && sticker.Type is StickerTypeAnimated or StickerTypeVideo)
                 {
-                    animations.Add((container, (T)(object)sticker));
+                    file = sticker.StickerValue;
                 }
-                else if (item is StickerSetInfo set && (set.StickerType is StickerTypeAnimated || set.StickerType is StickerTypeVideo))
+                else if (item is StickerSetInfo set && set.StickerType is StickerTypeAnimated or StickerTypeVideo)
                 {
-                    animations.Add((container, (T)(object)set));
+                    file = set.Thumbnail?.File ?? set.Covers.FirstOrDefault()?.Thumbnail?.File;
                 }
-            }
+                else if (item is Animation animation)
+                {
+                    file = animation.AnimationValue;
+                }
+                else if (item is InlineQueryResultAnimation inlineQueryResultAnimation)
+                {
+                    file = inlineQueryResultAnimation.Animation.AnimationValue;
+                }
+                else if (item is InlineQueryResultSticker inlineQueryResultSticker && inlineQueryResultSticker.Sticker.Type is StickerTypeAnimated or StickerTypeVideo)
+                {
+                    file = inlineQueryResultSticker.Sticker.StickerValue;
+                }
 
-            if (animations.Count > 0)
-            {
-                Play(animations, !intermediate);
-            }
-        }
-
-        public void UnloadVisibleItems()
-        {
-            foreach (var item in _old.Values)
-            {
-                var presenter = item.Presenter;
-                if (presenter != null)
-                {
-                    try
-                    {
-                        presenter.Pause();
-                    }
-                    catch { }
-
-                    try
-                    {
-                        item.Container.Children[0].Opacity = 1;
-                        item.Container.Children.Remove(presenter);
-                    }
-                    catch { }
-                }
-            }
-
-            _old.Clear();
-        }
-
-        class MediaPlayerItem
-        {
-            public File File { get; set; }
-            public Grid Container { get; set; }
-            public LottieView Presenter { get; set; }
-        }
-
-        private Dictionary<long, MediaPlayerItem> _old = new Dictionary<long, MediaPlayerItem>();
-
-        private void Play(IEnumerable<(SelectorItem Contaner, T Sticker)> items, bool auto)
-        {
-            var news = new Dictionary<long, MediaPlayerItem>();
-
-            foreach (var item in items)
-            {
-                File animation;
-                if (item.Sticker is StickerViewModel viewModel)
-                {
-                    animation = viewModel.StickerValue;
-                }
-                else if (item.Sticker is StickerSetViewModel setViewModel)
-                {
-                    animation = setViewModel.Thumbnail?.File ?? setViewModel.Covers.FirstOrDefault()?.Thumbnail?.File;
-                }
-                else if (item.Sticker is Sticker sticker)
-                {
-                    animation = sticker.StickerValue;
-                }
-                else if (item.Sticker is StickerSetInfo set)
-                {
-                    animation = set.Thumbnail?.File ?? set.Covers.FirstOrDefault()?.Thumbnail?.File;
-                }
-                else
+                if (file == null || !file.Local.IsDownloadingCompleted)
                 {
                     continue;
                 }
 
-                if (animation.Local.IsDownloadingCompleted)
+                var panel = container.ContentTemplateRoot;
+                if (panel is FrameworkElement final)
                 {
-                    var panel = item.Contaner.ContentTemplateRoot as Grid;
-                    if (panel is Grid final)
+                    var lottie = final.FindName("Player") as IPlayerView;
+                    if (lottie != null)
                     {
-                        final.Tag = item.Sticker;
-                        news[item.Sticker.GetHashCode()] = new MediaPlayerItem
-                        {
-                            File = animation,
-                            Container = final
-                        };
+                        lottie.Tag = item;
+                        next[item.GetHashCode()] = lottie;
                     }
                 }
-                else if (animation.Local.CanBeDownloaded && !animation.Local.IsDownloadingActive)
-                {
-                    DownloadFile?.Invoke(animation.Id, item.Sticker);
-                }
             }
 
-            foreach (var item in _old.Keys.Except(news.Keys).ToList())
+            foreach (var item in _prev.Keys.Except(next.Keys).ToList())
             {
-                var presenter = _old[item].Presenter;
+                var presenter = _prev[item];
                 if (presenter != null)
                 {
-                    //presenter.Dispose();
+                    presenter.Pause();
                 }
 
-                var container = _old[item].Container;
-                if (container != null && presenter != null)
-                {
-                    container.Children[0].Opacity = 1;
-                    container.Children.Remove(presenter);
-                }
-
-                _old.Remove(item);
+                _prev.Remove(item);
             }
 
-            if (!auto)
+            if (intermediate)
             {
                 return;
             }
 
-            foreach (var item in news.Keys.Except(_old.Keys).ToList())
+            foreach (var item in next)
             {
-                if (_old.ContainsKey(item))
+                //if (_prev.ContainsKey(item))
+                //{
+                //    continue;
+                //}
+
+                if (item.Value != null)
                 {
-                    continue;
+                    item.Value.Play();
                 }
 
-                if (news.TryGetValue(item, out MediaPlayerItem data) && data.Container != null && data.Container.Children.Count < 5)
-                {
-                    var presenter = new LottieView(false);
-                    presenter.AutoPlay = true;
-                    presenter.IsLoopingEnabled = true;
-                    presenter.Source = new Uri("file:///" + data.File.Local.Path);
-
-                    if (data.Container.Children[0] is Image img)
-                    {
-                        presenter.Thumbnail = img.Source;
-                    }
-
-                    data.Presenter = presenter;
-
-                    data.Container.Children[0].Opacity = 0;
-                    data.Container.Children.Insert(1, presenter);
-                }
-
-                _old[item] = news[item];
+                _prev[item.Key] = item.Value;
             }
+
+            _unloaded = false;
+        }
+
+        public void UnloadVisibleItems()
+        {
+            foreach (var item in _prev.Values)
+            {
+                item.Pause();
+            }
+
+            _prev.Clear();
+            _unloaded = true;
+        }
+
+        public void UnloadItems()
+        {
+            var panel = _listView.ItemsPanelRoot;
+            if (panel == null)
+            {
+                return;
+            }
+
+            foreach (var item in panel.Children)
+            {
+                if (item is SelectorItem container && container.ContentTemplateRoot is FrameworkElement final)
+                {
+                    var lottie = final.FindName("Player") as IPlayerView;
+                    if (lottie != null)
+                    {
+                        lottie.Unload();
+                    }
+                }
+            }
+
+            _prev.Clear();
+            _unloaded = true;
         }
     }
 }

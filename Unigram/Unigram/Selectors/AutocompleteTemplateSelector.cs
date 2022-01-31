@@ -13,6 +13,8 @@ namespace Unigram.Selectors
         public DataTemplate CommandTemplate { get; set; }
         public DataTemplate HashtagTemplate { get; set; }
         public DataTemplate StickerTemplate { get; set; }
+        public DataTemplate AnimatedStickerTemplate { get; set; }
+        public DataTemplate VideoStickerTemplate { get; set; }
         public DataTemplate EmojiTemplate { get; set; }
         public DataTemplate ItemTemplate { get; set; }
 
@@ -26,9 +28,23 @@ namespace Unigram.Selectors
             {
                 return CommandTemplate;
             }
-            else if (item is Sticker || item is StickerViewModel)
+            else if (item is Sticker sticker)
             {
-                return StickerTemplate;
+                return sticker.Type switch
+                {
+                    StickerTypeAnimated => AnimatedStickerTemplate,
+                    StickerTypeVideo => VideoStickerTemplate,
+                    _ => StickerTemplate
+                };
+            }
+            else if (item is StickerViewModel stickerViewModel)
+            {
+                return stickerViewModel.Type switch
+                {
+                    StickerTypeAnimated => AnimatedStickerTemplate,
+                    StickerTypeVideo => VideoStickerTemplate,
+                    _ => StickerTemplate
+                };
             }
             else if (item is EmojiData)
             {
