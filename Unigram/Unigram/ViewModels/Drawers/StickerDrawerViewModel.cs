@@ -19,18 +19,11 @@ namespace Unigram.ViewModels.Drawers
 {
     public class StickerDrawerViewModel : TLViewModelBase, IHandle<UpdateRecentStickers>, IHandle<UpdateFavoriteStickers>, IHandle<UpdateInstalledStickerSets>
     {
-        private readonly DisposableMutex _supergroupLock = new();
-
-        private readonly StickerSetViewModel _recentSet;
-        private readonly StickerSetViewModel _favoriteSet;
-        private readonly SupergroupStickerSetViewModel _groupSet;
-
-        private long _groupSetId;
-        private long _groupSetChatId;
+        private StickerSetViewModel _recentSet;
+        private StickerSetViewModel _favoriteSet;
+        private SupergroupStickerSetViewModel _groupSet;
 
         private bool _updated;
-        private bool _updating;
-        private long _updatedHash;
 
         public StickerDrawerViewModel(IProtoService protoService, ICacheService cacheService, ISettingsService settingsService, IEventAggregator aggregator)
             : base(protoService, cacheService, settingsService, aggregator)
@@ -53,12 +46,27 @@ namespace Unigram.ViewModels.Drawers
                 Name = "tg/groupStickers"
             });
 
+            //_groupSet = new TLChannelStickerSet
+            //{
+            //    Set = new TLStickerSet
+            //    {
+            //        Title = Strings.Resources.GroupStickers,
+            //        ShortName = "tg/groupStickers",
+            //    },
+            //};
+
+            FeaturedStickers = new MvxObservableCollection<TLFeaturedStickerSet>();
             SavedStickers = new StickerSetCollection();
+
+            //SyncStickers();
+            //SyncGifs();
+
+            InstallCommand = new RelayCommand<TLFeaturedStickerSet>(InstallExecute);
 
             Aggregator.Subscribe(this);
         }
 
-        private static readonly Dictionary<int, Dictionary<int, StickerDrawerViewModel>> _windowContext = new Dictionary<int, Dictionary<int, StickerDrawerViewModel>>();
+        private static Dictionary<int, Dictionary<int, StickerDrawerViewModel>> _windowContext = new Dictionary<int, Dictionary<int, StickerDrawerViewModel>>();
         public static StickerDrawerViewModel GetForCurrentView(int sessionId)
         {
             var id = ApplicationView.GetApplicationViewIdForWindow(Window.Current.CoreWindow);
@@ -86,7 +94,7 @@ namespace Unigram.ViewModels.Drawers
             {
                 if (result is Stickers favorite)
                 {
-                    BeginOnUIThread(() => Merge(_favoriteSet.Stickers, favorite.StickersValue));
+                    BeginOnUIThread(() => _favoriteSet.Update(favorite, true));
                 }
             });
         }
@@ -102,128 +110,190 @@ namespace Unigram.ViewModels.Drawers
             {
                 if (result is Stickers recent)
                 {
-                    for (int i = 0; i < _favoriteSet.Stickers.Count; i++)
+                    BeginOnUIThread(() =>
                     {
-                        var favSticker = _favoriteSet.Stickers[i];
-                        for (int j = 0; j < recent.StickersValue.Count; j++)
+                        for (int i = 0; i < _favoriteSet.Stickers.Count; i++)
                         {
-                            var recSticker = recent.StickersValue[j];
-                            if (recSticker.StickerValue.Id == favSticker.StickerValue.Id)
+                            var favSticker = _favoriteSet.Stickers[i];
+                            for (int j = 0; j < recent.StickersValue.Count; j++)
                             {
-                                recent.StickersValue.Remove(recSticker);
-                                break;
+                                var recSticker = recent.StickersValue[j];
+                                if (recSticker.StickerValue.Id == favSticker.StickerValue.Id)
+                                {
+                                    recent.StickersValue.Remove(recSticker);
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    for (int i = 20; i < recent.StickersValue.Count; i++)
-                    {
-                        recent.StickersValue.RemoveAt(20);
-                        i--;
-                    }
+                        for (int i = 20; i < recent.StickersValue.Count; i++)
+                        {
+                            recent.StickersValue.RemoveAt(20);
+                            i--;
+                        }
 
-                    BeginOnUIThread(() => Merge(_recentSet.Stickers, recent.StickersValue));
+                        _recentSet.Update(recent, true);
+                    });
                 }
             });
         }
 
-        private void Merge(IList<StickerViewModel> destination, IList<Sticker> origin)
-        {
-            if (destination.Count > 0)
-            {
-                for (int i = 0; i < destination.Count; i++)
-                {
-                    var user = destination[i];
-                    var index = -1;
-
-                    for (int j = 0; j < origin.Count; j++)
-                    {
-                        if (origin[j].SetId == user.SetId && origin[j].StickerValue.Id == user.StickerValue.Id)
-                        {
-                            index = j;
-                            break;
-                        }
-                    }
-
-                    if (index == -1)
-                    {
-                        destination.Remove(user);
-                        i--;
-                    }
-                }
-
-                for (int i = 0; i < origin.Count; i++)
-                {
-                    var filter = origin[i];
-                    var index = -1;
-
-                    for (int j = 0; j < destination.Count; j++)
-                    {
-                        if (destination[j].SetId == filter.SetId && destination[j].StickerValue.Id == filter.StickerValue.Id)
-                        {
-                            destination[j].Update(filter);
-
-                            index = j;
-                            break;
-                        }
-                    }
-
-                    if (index > -1 && index != i)
-                    {
-                        destination.RemoveAt(index);
-                        destination.Insert(Math.Min(i, destination.Count), new StickerViewModel(ProtoService, Aggregator, filter));
-                    }
-                    else if (index == -1)
-                    {
-                        destination.Insert(Math.Min(i, destination.Count), new StickerViewModel(ProtoService, Aggregator, filter));
-                    }
-                }
-            }
-            else
-            {
-                destination.Clear();
-                destination.AddRange(origin.Select(x => new StickerViewModel(ProtoService, Aggregator, x)));
-            }
-        }
-
         public void Handle(UpdateInstalledStickerSets update)
         {
-            if (update.IsMasks || _updating || !_updated)
-            {
-                return;
-            }
-
-            long hash = 0;
-            foreach (var elem in update.StickerSetIds)
-            {
-                hash = ((hash * 20261) + 0x80000000L + elem) % 0x80000000L;
-            }
-
-            if (_updatedHash == hash)
+            if (update.IsMasks)
             {
                 return;
             }
 
             _updated = false;
-            Update(null);
+            SyncStickers(null);
         }
+
+        private void ProcessRecentGifs()
+        {
+            //var recent = _stickersService.GetRecentGifs();
+            //BeginOnUIThread(() =>
+            //{
+            //    SavedGifs.ReplaceWith(MosaicMedia.Calculate(recent));
+            //});
+        }
+
+        private void ProcessRecentStickers()
+        {
+            //var items = _stickersService.GetRecentStickers(StickerType.Image);
+            //BeginOnUIThread(() =>
+            //{
+            //    _recentSet.Documents = new TLVector<TLDocumentBase>(items);
+            //    CheckDocuments();
+
+            //    if (_recentSet.Documents.Count > 0)
+            //    {
+            //        SavedStickers.Add(_recentSet);
+            //    }
+            //    else
+            //    {
+            //        SavedStickers.Remove(_recentSet);
+            //    }
+            //});
+        }
+
+        private void ProcessFavedStickers()
+        {
+            //var items = _stickersService.GetRecentStickers(StickerType.Fave);
+            //BeginOnUIThread(() =>
+            //{
+            //    _favedSet.Documents = new TLVector<TLDocumentBase>(items);
+            //    CheckDocuments();
+
+            //    if (_favedSet.Documents.Count > 0)
+            //    {
+            //        SavedStickers.Add(_favedSet);
+            //    }
+            //    else
+            //    {
+            //        SavedStickers.Remove(_favedSet);
+            //    }
+            //});
+        }
+
+        private void ProcessStickers()
+        {
+            //_stickers = true;
+
+            //var stickers = _stickersService.GetStickerSets(StickerType.Image);
+            //BeginOnUIThread(() =>
+            //{
+            //    SavedStickers.ReplaceWith(stickers);
+
+            //    //if (_groupSet.Documents != null && _groupSet.Documents.Count > 0)
+            //    //{
+            //    //    SavedStickers.Add(_groupSet);
+            //    //}
+            //    //else
+            //    //{
+            //    //    SavedStickers.Remove(_groupSet);
+            //    //}
+
+            //    //if (_recentSet.Documents != null && _recentSet.Documents.Count > 0)
+            //    //{
+            //    //    SavedStickers.Add(_recentSet);
+            //    //}
+            //    //else
+            //    //{
+            //    //    SavedStickers.Remove(_recentSet);
+            //    //}
+
+            //    //if (_favedSet.Documents != null && _favedSet.Documents.Count > 0)
+            //    //{
+            //    //    SavedStickers.Add(_favedSet);
+            //    //}
+            //    //else
+            //    //{
+            //    //    SavedStickers.Remove(_favedSet);
+            //    //}
+            //});
+        }
+
+        private void ProcessFeaturedStickers()
+        {
+            //_featured = true;
+            //var stickers = _stickersService.GetFeaturedStickerSets();
+            //var unread = _stickersService.GetUnreadStickerSets();
+            //BeginOnUIThread(() =>
+            //{
+            //    FeaturedUnreadCount = unread.Count;
+            //    FeaturedStickers.ReplaceWith(stickers.Select(set => new TLFeaturedStickerSet
+            //    {
+            //        Set = set.Set,
+            //        IsUnread = unread.Contains(set.Set.Id),
+            //        Covers = new TLVector<TLDocumentBase>(set.Documents.Take(Math.Min(set.Documents.Count, 5)))
+            //    }));
+            //});
+        }
+
+        private void CheckDocuments()
+        {
+            //if (_recentSet.Documents == null || _favedSet.Documents == null)
+            //{
+            //    return;
+            //}
+
+            //for (int i = 0; i < _favedSet.Documents.Count; i++)
+            //{
+            //    var favSticker = _favedSet.Documents[i] as TLDocument;
+            //    for (int j = 0; j < _recentSet.Documents.Count; j++)
+            //    {
+            //        var recSticker = _recentSet.Documents[j] as TLDocument;
+            //        if (recSticker.DCId == favSticker.DCId && recSticker.Id == favSticker.Id)
+            //        {
+            //            _recentSet.Documents.Remove(recSticker);
+            //            break;
+            //        }
+            //    }
+            //}
+        }
+
+        public MvxObservableCollection<TLFeaturedStickerSet> FeaturedStickers { get; private set; }
 
         public StickerSetCollection SavedStickers { get; private set; }
 
         private SearchStickerSetsCollection _searchStickers;
         public SearchStickerSetsCollection SearchStickers
         {
-            get => _searchStickers;
+            get
+            {
+                return _searchStickers;
+            }
             set
             {
                 Set(ref _searchStickers, value);
-                RaisePropertyChanged(nameof(Stickers));
+                RaisePropertyChanged(() => Stickers);
             }
         }
 
         public MvxObservableCollection<StickerSetViewModel> Stickers => SearchStickers ?? (MvxObservableCollection<StickerSetViewModel>)SavedStickers;
 
-        public async void Search(string query)
+        public async void FindStickers(string query)
         {
             if (string.IsNullOrWhiteSpace(query))
             {
@@ -238,48 +308,44 @@ namespace Unigram.ViewModels.Drawers
 
         public async void UpdateSupergroupFullInfo(Chat chat, Supergroup group, SupergroupFullInfo fullInfo)
         {
-            using (await _supergroupLock.WaitAsync())
-            {
-                if ((_groupSetId == fullInfo?.StickerSetId && _groupSetChatId == chat.Id) || fullInfo == null)
-                {
-                    if (fullInfo == null)
-                    {
-                        _groupSetId = 0;
-                        _groupSetChatId = 0;
-                        SavedStickers.Remove(_groupSet);
-                    }
+            SavedStickers.Remove(_groupSet);
 
+            var refresh = true;
+
+            var appData = ApplicationData.Current.LocalSettings.CreateContainer("Channels", ApplicationDataCreateDisposition.Always);
+            if (appData.Values.TryGetValue("Stickers" + group.Id, out object stickersObj))
+            {
+                var stickersId = (long)stickersObj;
+                if (stickersId == fullInfo.StickerSetId)
+                {
+                    refresh = false;
+                }
+            }
+
+            if (fullInfo.StickerSetId != 0 && refresh)
+            {
+                if (fullInfo.StickerSetId == _groupSet.Id && chat.Id == _groupSet.ChatId)
+                {
+                    SavedStickers.Add(_groupSet);
                     return;
                 }
 
-                _groupSetId = 0;
-                _groupSetChatId = 0;
-                SavedStickers.Remove(_groupSet);
-
-                var appData = ApplicationData.Current.LocalSettings.CreateContainer("Channels", ApplicationDataCreateDisposition.Always);
-                if (appData.Values.TryGetValue("Stickers" + chat.Id, out object stickersObj))
+                var response = await ProtoService.SendAsync(new GetStickerSet(fullInfo.StickerSetId));
+                if (response is StickerSet stickerSet)
                 {
-                    var stickersId = (long)stickersObj;
-                    if (stickersId == fullInfo.StickerSetId)
-                    {
-                        return;
-                    }
-                }
-
-                if (fullInfo.StickerSetId != 0)
-                {
-                    var response = await ProtoService.SendAsync(new GetStickerSet(fullInfo.StickerSetId));
-                    if (response is StickerSet stickerSet)
+                    BeginOnUIThread(() =>
                     {
                         _groupSet.Update(chat.Id, stickerSet);
 
                         if (_groupSet.Stickers != null && _groupSet.Stickers.Count > 0)
                         {
-                            _groupSetId = stickerSet.Id;
-                            _groupSetChatId = chat.Id;
                             SavedStickers.Add(_groupSet);
                         }
-                    }
+                        else
+                        {
+                            SavedStickers.Remove(_groupSet);
+                        }
+                    });
                 }
             }
         }
@@ -292,7 +358,7 @@ namespace Unigram.ViewModels.Drawers
         //    SavedStickers.Remove(_groupSet);
         //}
 
-        public void Update(Chat chat)
+        public void SyncStickers(Chat chat)
         {
             if (_updated)
             {
@@ -300,7 +366,6 @@ namespace Unigram.ViewModels.Drawers
             }
 
             _updated = true;
-            _updating = true;
 
             ProtoService.Send(new GetFavoriteStickers(), result1 =>
             {
@@ -347,20 +412,10 @@ namespace Unigram.ViewModels.Drawers
                                 stickers.Add(_groupSet);
                             }
 
-                            long hash = 0;
-                            foreach (var elem in sets.Sets)
-                            {
-                                hash = ((hash * 20261) + 0x80000000L + elem.Id) % 0x80000000L;
-                            }
-
-                            _updatedHash = hash;
-
                             if (sets.Sets.Count > 0)
                             {
                                 ProtoService.Send(new GetStickerSet(sets.Sets[0].Id), result4 =>
                                 {
-                                    _updating = false;
-
                                     if (result4 is StickerSet set)
                                     {
                                         stickers.Add(new StickerSetViewModel(ProtoService, Aggregator, sets.Sets[0], set));
@@ -374,20 +429,137 @@ namespace Unigram.ViewModels.Drawers
                             }
                             else
                             {
-                                _updating = false;
                                 BeginOnUIThread(() => SavedStickers.ReplaceWith(stickers.Union(sets.Sets.Select(x => new StickerSetViewModel(ProtoService, Aggregator, x)))));
                             }
                         }
                     });
                 });
             });
+
+
+
+
+            //ProtoService.Send(new GetSavedAnimations(), result =>
+            //{
+
+            //});
+
+            //ProtoService.Send(new GetTrendingStickerSets(), result =>
+            //{
+
+            //});
+        }
+
+        public void SyncGifs()
+        {
+            //Execute.BeginOnThreadPool(() =>
+            //{
+            //    _stickersService.LoadRecents(StickerType.Image, true, true, false);
+
+            //    ProcessRecentGifs();
+            //});
         }
 
         private int _featuredUnreadCount;
         public int FeaturedUnreadCount
         {
-            get => _featuredUnreadCount;
-            set => Set(ref _featuredUnreadCount, value);
+            get
+            {
+                return _featuredUnreadCount;
+            }
+            set
+            {
+                Set(ref _featuredUnreadCount, value);
+            }
+        }
+
+        public RelayCommand<TLFeaturedStickerSet> InstallCommand { get; }
+        private async void InstallExecute(TLFeaturedStickerSet featured)
+        {
+            //if (_stickersService.IsStickerPackInstalled(featured.Set.Id) == false)
+            //{
+            //    var response = await LegacyService.InstallStickerSetAsync(new TLInputStickerSetID { Id = featured.Set.Id, AccessHash = featured.Set.AccessHash }, false);
+            //    if (response.IsSucceeded)
+            //    {
+            //        _stickersService.LoadStickers(featured.Set.IsMasks ? StickerType.Mask : StickerType.Image, false, true);
+
+            //        featured.Set.IsInstalled = true;
+            //        featured.Set.IsArchived = false;
+            //    }
+            //}
+            //else
+            //{
+            //    _stickersService.RemoveStickersSet(featured.Set, featured.Set.IsOfficial ? 1 : 0, true);
+
+            //    featured.Set.IsInstalled = featured.Set.IsOfficial;
+            //    featured.Set.IsArchived = featured.Set.IsOfficial;
+
+            //    NavigationService.GoBack();
+            //}
+        }
+
+        //protected override void BeginOnUIThread(Action action)
+        //{
+        //    // This is somehow needed because this viewmodel requires a Dispatcher
+        //    // in some situations where base one might be null.
+        //    Execute.BeginOnUIThread(action);
+        //}
+    }
+
+    public class TLChannelStickerSet : System.Object
+    {
+        //public TLChannel With { get; set; }
+        //public TLChannelFull Full { get; set; }
+    }
+
+    public class TLFeaturedStickerSet : System.Object
+    {
+        //public TLStickerSet Set { get; set; }
+
+        //private TLVector<TLDocumentBase> _covers;
+        //public TLVector<TLDocumentBase> Covers
+        //{
+        //    get
+        //    {
+        //        return _covers;
+        //    }
+        //    set
+        //    {
+        //        _covers = new TLVector<TLDocumentBase>();
+
+        //        for (int i = 0; i < 5; i++)
+        //        {
+        //            if (i < value.Count)
+        //            {
+        //                _covers.Add(value[i]);
+        //            }
+        //            else
+        //            {
+        //                _covers.Add(null);
+        //            }
+        //        }
+        //    }
+        //}
+
+        private bool _isUnread;
+        public bool IsUnread
+        {
+            get
+            {
+                return _isUnread;
+            }
+            set
+            {
+                _isUnread = value;
+            }
+        }
+
+        public string Unread
+        {
+            get
+            {
+                return _isUnread ? "\u2022" : string.Empty;
+            }
         }
     }
 
@@ -398,9 +570,14 @@ namespace Unigram.ViewModels.Drawers
         {
         }
 
+        public SupergroupStickerSetViewModel(IProtoService protoService, IEventAggregator aggregator, StickerSetInfo info, StickerSet set)
+            : base(protoService, aggregator, info, set)
+        {
+        }
+
         public void Update(long chatId, StickerSet set, bool reset = true)
         {
-            //_info.Id = set.Id;
+            _info.Id = set.Id;
             ChatId = chatId;
 
             if (reset)
@@ -412,10 +589,6 @@ namespace Unigram.ViewModels.Drawers
                 Stickers.ReplaceWith(set.Stickers.Select(x => new StickerViewModel(_protoService, _aggregator, x)));
             }
         }
-
-        public override void Update(StickerSet set, bool reset = false) { }
-
-        public override void Update(Stickers stickers, bool raise = false) { }
 
         public long ChatId { get; private set; }
     }
@@ -438,7 +611,7 @@ namespace Unigram.ViewModels.Drawers
             var placeholders = new List<StickerViewModel>();
             for (int i = 0; i < (info.IsInstalled ? info.Size : info.Covers?.Count ?? 0); i++)
             {
-                placeholders.Add(new StickerViewModel(_protoService, _aggregator, info.Id, info.StickerType));
+                placeholders.Add(new StickerViewModel(_protoService, _aggregator, info.Id));
             }
 
             Stickers = new MvxObservableCollection<StickerViewModel>(placeholders);
@@ -464,7 +637,7 @@ namespace Unigram.ViewModels.Drawers
             Covers = info.Covers;
         }
 
-        public virtual void Update(StickerSet set, bool reset = false)
+        public void Update(StickerSet set, bool reset = false)
         {
             _set = set;
 
@@ -479,7 +652,7 @@ namespace Unigram.ViewModels.Drawers
             }
         }
 
-        public virtual void Update(Stickers stickers, bool raise = false)
+        public void Update(Stickers stickers, bool raise = false)
         {
             if (raise)
             {
@@ -495,8 +668,11 @@ namespace Unigram.ViewModels.Drawers
 
         public bool IsLoaded { get; set; }
 
+        //public IList<StickerEmojis> Emojis { get => _set?.Emojis; set => _set?.Emojis = value; }
+        //public IList<Sticker> Stickers { get; set; }
         public bool IsViewed => _set?.IsViewed ?? _info.IsViewed;
-        public StickerType StickerType => _set?.StickerType ?? _info.StickerType;
+        public bool IsAnimated => _set?.StickerType is StickerTypeAnimated || _set?.StickerType is StickerTypeVideo || _info.StickerType is StickerTypeAnimated || _info.StickerType is StickerTypeVideo;
+        public bool IsMasks => _set?.StickerType is StickerTypeMask || _info.StickerType is StickerTypeMask;
         public bool IsOfficial => _set?.IsOfficial ?? _info.IsOfficial;
         public bool IsArchived => _set?.IsArchived ?? _info.IsArchived;
         public bool IsInstalled => _set?.IsInstalled ?? _info.IsInstalled;
@@ -507,29 +683,22 @@ namespace Unigram.ViewModels.Drawers
         public Thumbnail Thumbnail => _set?.Thumbnail ?? _info.Thumbnail;
 
         public IList<Sticker> Covers { get; private set; }
-
-        public override string ToString()
-        {
-            return Title ?? base.ToString();
-        }
     }
 
     public class StickerViewModel
     {
         private Sticker _sticker;
-        private readonly long _setId;
-        private readonly StickerType _type;
+        private long _setId;
 
         private readonly IProtoService _protoService;
         private readonly IEventAggregator _aggregator;
 
-        public StickerViewModel(IProtoService protoService, IEventAggregator aggregator, long setId, StickerType type)
+        public StickerViewModel(IProtoService protoService, IEventAggregator aggregator, long setId)
         {
             _protoService = protoService;
             _aggregator = aggregator;
 
             _setId = setId;
-            _type = type;
         }
 
         public StickerViewModel(IProtoService protoService, IEventAggregator aggregator, Sticker sticker)
@@ -538,7 +707,6 @@ namespace Unigram.ViewModels.Drawers
             _aggregator = aggregator;
 
             _sticker = sticker;
-            _type = sticker.Type;
         }
 
         public void Update(Sticker sticker)
@@ -549,14 +717,26 @@ namespace Unigram.ViewModels.Drawers
         public IProtoService ProtoService => _protoService;
         public IEventAggregator Aggregator => _aggregator;
 
+        public bool UpdateFile(File file)
+        {
+            if (_sticker == null)
+            {
+                return false;
+            }
+
+            return _sticker.UpdateFile(file);
+        }
+
         public static implicit operator Sticker(StickerViewModel viewModel)
         {
             return viewModel._sticker;
         }
 
         public File StickerValue => _sticker?.StickerValue;
-        public IList<ClosedVectorPath> Outline => _sticker?.Outline;
-        public StickerType Type => _sticker?.Type ?? _type;
+        public Thumbnail Thumbnail => _sticker?.Thumbnail;
+        //public MaskPosition MaskPosition => _sticker?.MaskPosition;
+        public bool IsAnimated => _sticker?.Type is StickerTypeAnimated || _sticker?.Type is StickerTypeVideo;
+        public bool IsMask => _sticker?.Type is StickerTypeMask;
         public string Emoji => _sticker?.Emoji;
         public int Height => _sticker?.Height ?? 0;
         public int Width => _sticker?.Width ?? 0;

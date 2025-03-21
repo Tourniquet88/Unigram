@@ -1,32 +1,26 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using Telegram.Td.Api;
 using Unigram.Common;
 using Unigram.Controls;
 using Unigram.Converters;
-using Unigram.Navigation;
+using Unigram.Services;
 using Unigram.ViewModels;
-using Windows.UI.Composition;
 using Windows.UI.ViewManagement;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Controls.Primitives;
-using Windows.UI.Xaml.Hosting;
 using Windows.UI.Xaml.Navigation;
 
 namespace Unigram.Views.Popups
 {
-    public sealed partial class StickerSetPopup : ContentPopup
+    public sealed partial class StickerSetPopup : ContentPopup, IHandle<UpdateFile>
     {
         public StickerSetViewModel ViewModel => DataContext as StickerSetViewModel;
 
-        private readonly Dictionary<string, DataTemplate> _typeToTemplateMapping = new Dictionary<string, DataTemplate>();
-        private readonly Dictionary<string, HashSet<SelectorItem>> _typeToItemHashSetMapping = new Dictionary<string, HashSet<SelectorItem>>();
-
-        private readonly AnimatedListHandler<Sticker> _handler;
-        private readonly ZoomableListHandler _zoomer;
+        private AnimatedListHandler<Sticker> _handler;
+        private ZoomableListHandler _zoomer;
 
         private StickerSetPopup()
         {
@@ -34,59 +28,47 @@ namespace Unigram.Views.Popups
             DataContext = TLContainer.Current.Resolve<StickerSetViewModel>();
 
             _handler = new AnimatedListHandler<Sticker>(List);
+            _handler.DownloadFile = (id, sticker) =>
+            {
+                ViewModel.ProtoService.DownloadFile(id, 1);
+            };
 
             _zoomer = new ZoomableListHandler(List);
             _zoomer.Opening = _handler.UnloadVisibleItems;
             _zoomer.Closing = _handler.ThrottleVisibleItems;
             _zoomer.DownloadFile = fileId => ViewModel.ProtoService.DownloadFile(fileId, 32);
-            _zoomer.SessionId = () => ViewModel.ProtoService.SessionId;
-
-            _typeToItemHashSetMapping.Add("AnimatedItemTemplate", new HashSet<SelectorItem>());
-            _typeToItemHashSetMapping.Add("VideoItemTemplate", new HashSet<SelectorItem>());
-            _typeToItemHashSetMapping.Add("ItemTemplate", new HashSet<SelectorItem>());
-
-            _typeToTemplateMapping.Add("AnimatedItemTemplate", Resources["AnimatedItemTemplate"] as DataTemplate);
-            _typeToTemplateMapping.Add("VideoItemTemplate", Resources["VideoItemTemplate"] as DataTemplate);
-            _typeToTemplateMapping.Add("ItemTemplate", Resources["ItemTemplate"] as DataTemplate);
+            _zoomer.GetEmojisAsync = fileId => ViewModel.ProtoService.SendAsync(new GetStickerEmojis(new InputFileId(fileId)));
 
             SecondaryButtonText = Strings.Resources.Close;
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
+            ViewModel.Aggregator.Subscribe(this);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
+            ViewModel.Aggregator.Unsubscribe(this);
         }
 
         private void OnClosing(ContentDialog sender, ContentDialogClosingEventArgs args)
         {
-            _handler.UnloadItems();
+            _handler.UnloadVisibleItems();
+            _handler.DownloadFile = null;
 
             _zoomer.Opening = null;
             _zoomer.Closing = null;
             _zoomer.DownloadFile = null;
-            _zoomer.SessionId = null;
+            _zoomer.GetEmojisAsync = null;
         }
 
         #region Show
 
-        private static readonly Dictionary<int, WeakReference<StickerSetPopup>> _windowContext = new Dictionary<int, WeakReference<StickerSetPopup>>();
+        private static Dictionary<int, WeakReference<StickerSetPopup>> _windowContext = new Dictionary<int, WeakReference<StickerSetPopup>>();
         public static StickerSetPopup GetForCurrentView()
         {
             return new StickerSetPopup();
-
-            var id = ApplicationView.GetApplicationViewIdForWindow(Window.Current.CoreWindow);
-            if (_windowContext.TryGetValue(id, out WeakReference<StickerSetPopup> reference) && reference.TryGetTarget(out StickerSetPopup value))
-            {
-                return value;
-            }
-
-            var context = new StickerSetPopup();
-            _windowContext[id] = new WeakReference<StickerSetPopup>(context);
-
-            return context;
         }
 
         public ItemClickEventHandler ItemClick { get; set; }
@@ -153,65 +135,19 @@ namespace Unigram.Views.Popups
 
         private void OnChoosingItemContainer(ListViewBase sender, ChoosingItemContainerEventArgs args)
         {
-            var typeName = args.Item is Sticker sticker ? sticker.Type switch
-            {
-                StickerTypeAnimated => "AnimatedItemTemplate",
-                StickerTypeVideo => "VideoItemTemplate",
-                _ => "ItemTemplate"
-            } : "ItemTemplate";
-            var relevantHashSet = _typeToItemHashSetMapping[typeName];
-
-            // args.ItemContainer is used to indicate whether the ListView is proposing an
-            // ItemContainer (ListViewItem) to use. If args.Itemcontainer != null, then there was a
-            // recycled ItemContainer available to be reused.
-            if (args.ItemContainer != null)
-            {
-                if (args.ItemContainer.Tag.Equals(typeName))
-                {
-                    // Suggestion matches what we want, so remove it from the recycle queue
-                    relevantHashSet.Remove(args.ItemContainer);
-                }
-                else
-                {
-                    // The ItemContainer's datatemplate does not match the needed
-                    // datatemplate.
-                    // Don't remove it from the recycle queue, since XAML will resuggest it later
-                    args.ItemContainer = null;
-                }
-            }
-
-            // If there was no suggested container or XAML's suggestion was a miss, pick one up from the recycle queue
-            // or create a new one
             if (args.ItemContainer == null)
             {
-                // See if we can fetch from the correct list.
-                if (relevantHashSet.Count > 0)
-                {
-                    // Unfortunately have to resort to LINQ here. There's no efficient way of getting an arbitrary
-                    // item from a hashset without knowing the item. Queue isn't usable for this scenario
-                    // because you can't remove a specific element (which is needed in the block above).
-                    args.ItemContainer = relevantHashSet.First();
-                    relevantHashSet.Remove(args.ItemContainer);
-                }
-                else
-                {
-                    // There aren't any (recycled) ItemContainers available. So a new one
-                    // needs to be created.
-                    var item = new GridViewItem();
-                    item.ContentTemplate = _typeToTemplateMapping[typeName];
-                    item.Style = sender.ItemContainerStyle;
-                    item.Tag = typeName;
-                    args.ItemContainer = item;
+                args.ItemContainer = new GridViewItem();
+                args.ItemContainer.ContentTemplate = sender.ItemTemplate;
+                args.ItemContainer.Style = sender.ItemContainerStyle;
 
-                    _zoomer.ElementPrepared(args.ItemContainer);
-                }
+                _zoomer.ElementPrepared(args.ItemContainer);
             }
 
-            // Indicate to XAML that we picked a container for it
             args.IsContainerPrepared = true;
         }
 
-        private async void OnContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+        private void OnContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
         {
             if (args.InRecycleQueue)
             {
@@ -221,47 +157,38 @@ namespace Unigram.Views.Popups
             var content = args.ItemContainer.ContentTemplateRoot as Grid;
             var sticker = args.Item as Sticker;
 
-            var file = sticker.StickerValue;
-            if (file.Local.IsDownloadingCompleted)
+            if (args.Phase == 0)
             {
-                if (content.Children[0] is Border border && border.Child is Image photo)
-                {
-                    photo.Source = await PlaceholderHelper.GetWebPFrameAsync(file.Local.Path, 60);
-                    ElementCompositionPreview.SetElementChildVisual(content.Children[0], null);
-                }
-                else if (args.Phase == 0 && content.Children[0] is LottieView lottie)
-                {
-                    lottie.Source = UriEx.ToLocal(file.Local.Path);
-                }
-                else if (args.Phase == 0 && content.Children[0] is AnimationView video)
-                {
-                    video.Source = new LocalVideoSource(file);
-                }
+                var title = content.Children[content.Children.Count - 1] as TextBlock;
+                title.Text = sticker.Emoji;
             }
-            else
+            else if (args.Phase == 1)
             {
-                if (content.Children[0] is Border border && border.Child is Image photo)
+            }
+            else if (args.Phase == 2)
+            {
+                var photo = content.Children[0] as Image;
+
+                if (sticker == null || sticker.Thumbnail == null)
+                {
+                    return;
+                }
+
+                var file = sticker.Thumbnail.File;
+                if (file.Local.IsDownloadingCompleted)
+                {
+                    photo.Source = PlaceholderHelper.GetWebPFrame(file.Local.Path);
+                }
+                else if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive)
                 {
                     photo.Source = null;
-                }
-                else if (args.Phase == 0 && content.Children[0] is LottieView lottie)
-                {
-                    lottie.Source = null;
-                }
-                else if (args.Phase == 0 && content.Children[0] is AnimationView video)
-                {
-                    video.Source = null;
-                }
-
-                CompositionPathParser.ParseThumbnail(sticker.Outline, out ShapeVisual visual, false);
-                ElementCompositionPreview.SetElementChildVisual(content.Children[0], visual);
-
-                UpdateManager.Subscribe(content, ViewModel.ProtoService, file, UpdateFile, true);
-
-                if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive)
-                {
                     ViewModel.ProtoService.DownloadFile(file.Id, 1);
                 }
+            }
+
+            if (args.Phase < 2)
+            {
+                args.RegisterUpdateCallback(OnContainerContentChanging);
             }
 
             args.Handled = true;
@@ -292,48 +219,51 @@ namespace Unigram.Views.Popups
                 : string.Format(masks ? Strings.Resources.AddMasks : Strings.Resources.AddStickers, ViewModel.StickerSet.Stickers.Count);
         }
 
-        private Style ConvertIsInstalledStyle(bool installed, bool archived, bool official)
-        {
-            if (ViewModel == null || ViewModel.StickerSet == null || ViewModel.StickerSet.Stickers == null)
-            {
-                return BootStrapper.Current.Resources["AccentButtonStyle"] as Style;
-            }
-
-            if (installed && !archived)
-            {
-                return BootStrapper.Current.Resources["DangerButtonStyle"] as Style;
-            }
-
-            return BootStrapper.Current.Resources["AccentButtonStyle"] as Style;
-        }
-
         #endregion
 
         #region Handle
 
-        private async void UpdateFile(object target, File file)
+        public void Handle(UpdateFile update)
         {
-            var content = target as Grid;
-            if (content == null)
+            if (!update.File.Local.IsDownloadingCompleted)
             {
                 return;
             }
 
-            if (content.Children[0] is Border border && border.Child is Image photo)
+            this.BeginOnUIThread(() => UpdateFile(update.File));
+        }
+
+        public void UpdateFile(File file)
+        {
+            foreach (Sticker sticker in List.Items)
             {
-                photo.Source = await PlaceholderHelper.GetWebPFrameAsync(file.Local.Path, 60);
-                ElementCompositionPreview.SetElementChildVisual(content.Children[0], null);
+                if (sticker.UpdateFile(file) && file.Local.IsDownloadingCompleted)
+                {
+                    if (file.Id == sticker.Thumbnail?.File.Id)
+                    {
+                        var container = List.ContainerFromItem(sticker) as SelectorItem;
+                        if (container == null)
+                        {
+                            continue;
+                        }
+
+                        var content = container.ContentTemplateRoot as Grid;
+                        if (content == null)
+                        {
+                            continue;
+                        }
+
+                        var photo = content.Children[0] as Image;
+                        photo.Source = PlaceholderHelper.GetWebPFrame(file.Local.Path);
+                    }
+                    else if (file.Id == sticker.StickerValue.Id)
+                    {
+                        _handler.ThrottleVisibleItems();
+                    }
+                }
             }
-            else if (content.Children[0] is LottieView lottie)
-            {
-                lottie.Source = UriEx.ToLocal(file.Local.Path);
-                _handler.ThrottleVisibleItems();
-            }
-            else if (content.Children[0] is AnimationView video)
-            {
-                video.Source = new LocalVideoSource(file);
-                _handler.ThrottleVisibleItems();
-            }
+
+            _zoomer.UpdateFile(file);
         }
 
         #endregion

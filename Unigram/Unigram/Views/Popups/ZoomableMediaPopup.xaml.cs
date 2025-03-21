@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading.Tasks;
 using Telegram.Td.Api;
 using Unigram.Common;
 using Unigram.Controls;
@@ -13,9 +14,6 @@ namespace Unigram.Views.Popups
     {
         private readonly ApplicationView _applicationView;
 
-        private string _fileToken;
-        private string _thumbnailToken;
-
         private object _lastItem;
 
         public ZoomableMediaPopup()
@@ -24,13 +22,12 @@ namespace Unigram.Views.Popups
 
             _applicationView = ApplicationView.GetForCurrentView();
             _applicationView.VisibleBoundsChanged += OnVisibleBoundsChanged;
-
+            
             OnVisibleBoundsChanged(_applicationView, null);
         }
 
         public Action<int> DownloadFile { get; set; }
-
-        public Func<int> SessionId { get; set; }
+        public Func<int, Task<BaseObject>> GetEmojisAsync { get; set; }
 
         private void OnVisibleBoundsChanged(ApplicationView sender, object args)
         {
@@ -73,7 +70,7 @@ namespace Unigram.Views.Popups
             Padding = new Thickness();
         }
 
-        public void SetSticker(Sticker sticker)
+        public async void SetSticker(Sticker sticker)
         {
             _lastItem = sticker;
 
@@ -88,6 +85,16 @@ namespace Unigram.Views.Popups
             }
 
             UpdateFile(sticker, sticker.StickerValue, true);
+
+            var getEmojis = GetEmojisAsync;
+            if (getEmojis != null)
+            {
+                var response = await getEmojis(sticker.StickerValue.Id);
+                if (response is Emojis emojis)
+                {
+                    Title.Text = string.Join(" ", emojis.EmojisValue);
+                }
+            }
         }
 
         public void SetAnimation(Animation animation)
@@ -107,7 +114,7 @@ namespace Unigram.Views.Popups
             UpdateFile(animation, animation.AnimationValue, true);
         }
 
-        private void UpdateFile(object target, File file)
+        public void UpdateFile(File file)
         {
             if (_lastItem is Sticker sticker && file.Local.IsDownloadingCompleted)
             {
@@ -126,6 +133,10 @@ namespace Unigram.Views.Popups
                 {
                     UpdateFile(animation, file, false);
                 }
+                else if (animation.Thumbnail?.File.Id == file.Id && animation.Thumbnail.Format is ThumbnailFormatJpeg)
+                {
+                    UpdateThumbnail(file, false);
+                }
             }
         }
 
@@ -133,17 +144,11 @@ namespace Unigram.Views.Popups
         {
             if (file.Local.IsDownloadingCompleted)
             {
-                if (sticker.Type is StickerTypeAnimated)
+                if ((sticker.Type is StickerTypeAnimated || sticker.Type is StickerTypeVideo))
                 {
                     Thumbnail.Opacity = 0;
                     Texture.Source = null;
-                    Container.Child = new LottieView { Source = UriEx.ToLocal(file.Local.Path) };
-                }
-                else if (sticker.Type is StickerTypeVideo)
-                {
-                    Thumbnail.Opacity = 0;
-                    Texture.Source = null;
-                    Container.Child = new AnimationView { Source = new LocalVideoSource(file) };
+                    Container.Child = new LottieView { Source = new Uri("file:///" + file.Local.Path) };
                 }
                 else
                 {
@@ -152,15 +157,13 @@ namespace Unigram.Views.Popups
                     Container.Child = new Border();
                 }
             }
-            else
+            else if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive)
             {
                 Thumbnail.Opacity = 1;
                 Texture.Source = null;
                 Container.Child = new Border();
 
-                UpdateManager.Subscribe(this, SessionId(), file, ref _fileToken, UpdateFile, true);
-
-                if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive && download)
+                if (download)
                 {
                     DownloadFile?.Invoke(file.Id);
                 }
@@ -173,26 +176,19 @@ namespace Unigram.Views.Popups
             {
                 Thumbnail.Opacity = 0;
                 Texture.Source = null;
-                Container.Child = new AnimationView { Source = new LocalVideoSource(file) };
+                Container.Child = new AnimationView { Source = new Uri("file:///" + file.Local.Path) };
             }
-            else
+            else if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive)
             {
                 Thumbnail.Opacity = 1;
                 Texture.Source = null;
                 Container.Child = new Border();
 
-                UpdateManager.Subscribe(this, SessionId(), file, ref _fileToken, UpdateFile, true);
-
-                if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive && download)
+                if (download)
                 {
                     DownloadFile?.Invoke(file.Id);
                 }
             }
-        }
-
-        private void UpdateThumbnail(object target, File file)
-        {
-            UpdateThumbnail(file, false);
         }
 
         private void UpdateThumbnail(File file, bool download)
@@ -201,13 +197,11 @@ namespace Unigram.Views.Popups
             {
                 Thumbnail.Source = PlaceholderHelper.GetWebPFrame(file.Local.Path);
             }
-            else
+            else if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive)
             {
                 Thumbnail.Source = null;
 
-                UpdateManager.Subscribe(this, SessionId(), file, ref _thumbnailToken, UpdateThumbnail, true);
-
-                if (file.Local.CanBeDownloaded && !file.Local.IsDownloadingActive && download)
+                if (download)
                 {
                     DownloadFile?.Invoke(file.Id);
                 }
